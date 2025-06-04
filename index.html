@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="ka">
+<head>
+    <meta charset="UTF-8">
+    <title>ტაიმფრეიმ სკანერი</title>
+    <style>
+        body {
+            font-family: "BPG Nino Mtavruli", sans-serif;
+            text-align: center;
+            padding: 40px;
+        }
+        h1 {
+            font-size: 38px;
+        }
+        button {
+            font-size: 26px;
+            padding: 20px 35px;
+            margin: 20px;
+            border-radius: 12px;
+        }
+        .info {
+            margin-top: 30px;
+            font-size: 24px;
+        }
+        #timer {
+            font-size: 28px;
+            font-weight: bold;
+            margin-top: 15px;
+        }
+        ul {
+            list-style-type: none;
+            padding: 0;
+        }
+        li {
+            font-size: 20px;
+            margin: 8px;
+            padding: 10px;
+            border-radius: 8px;
+        }
+        .strong { background-color: #d4f4dd; font-weight: bold; }
+        .medium { background-color: #fff8d6; }
+        .weak { background-color: #f8d6d6; }
+    </style>
+</head>
+<body>
+    <h1>აირჩიე ტაიმფრეიმი:</h1>
+    <form method="POST" action="/start">
+        <button name="timeframe" value="5m">5 წუთი</button>
+        <button name="timeframe" value="15m">15 წუთი</button>
+    </form>
+
+    {% if status.running %}
+        <div class="info">
+            ⏳ პროცესი დაიწყო — ვამოწმებთ {{ status.tf }} ტაიმფრეიმზე {{ status.total }} ქოინს...
+        </div>
+        <div id="timer">⏱️ დარჩენილი დრო: ითვლება...</div>
+    {% endif %}
+
+    {% if status.finished %}
+        <div class="info" style="color: green; margin-top: 30px;">
+            ✅ სკანირება დასრულდა!
+        </div>
+        <div class="info">
+            🕓 შესრულებული დრო: {{ status.duration // 60 }} წუთი {{ "%02d"|format(status.duration % 60) }} წამი
+        </div>
+        <div class="info">
+            <h3>📋 აღმოჩენილი სიგნალები:</h3>
+            <ul>
+                {% for item in status.results %}
+                    {% set indicators = item.count('+') %}
+                    <li class="{{ 'strong' if indicators >= 4 else 'medium' if indicators >= 2 else 'weak' }}">
+                        {{ item }} {% if indicators >= 1 %}[{{ '⭐' * indicators }}]{% endif %}
+                    </li>
+                {% endfor %}
+            </ul>
+        </div>
+    {% endif %}
+
+    <script>
+        let remaining = 0;
+        const timerElem = document.getElementById("timer");
+
+        function updateTimer() {
+            fetch("/status")
+                .then(response => response.json())
+                .then(data => {
+                    if (data.running && !data.finished) {
+                        const estimatedTotal = Math.round(data.total * 0.4);
+                        const remainingSeconds = estimatedTotal - data.duration;
+                        if (remainingSeconds > 0) {
+                            let mins = Math.floor(remainingSeconds / 60);
+                            let secs = remainingSeconds % 60;
+                            timerElem.innerText = `⏱️ დარჩენილი დრო: ${mins} წუთი ${secs.toString().padStart(2, '0')} წამი`;
+                        } else {
+                            timerElem.innerText = `⏱️ დასრულების მოლოდინი...`;
+                        }
+                        setTimeout(updateTimer, 1000);
+                    } else if (data.finished) {
+                        location.reload();
+                    }
+                });
+        }
+
+        {% if status.running and not status.finished %}
+            updateTimer();
+        {% endif %}
+    </script>
+</body>
+</html>
