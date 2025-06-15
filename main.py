@@ -8,6 +8,7 @@ import threading
 
 app = Flask(__name__)
 
+# პირდაპირ ჩაშენებული Telegram პარამეტრები
 BOT_TOKEN = "8158204187:AAFPEApXyE_ot0pz3J23b1h5ubJ82El5gLc"
 CHAT_ID = "7465722084"
 
@@ -49,7 +50,7 @@ def check_cross(symbol, tf):
         df['bb_width'] = bb.bollinger_hband() - bb.bollinger_lband()
         df['adx'] = ta.trend.ADXIndicator(df['high'], df['low'], df['close']).adx()
 
-        # Conditions
+        # პირობები
         ema_cross_up = df['ema7'].iloc[-2] < df['ema25'].iloc[-2] and df['ema7'].iloc[-1] > df['ema25'].iloc[-1]
         ema_cross_down = df['ema7'].iloc[-2] > df['ema25'].iloc[-2] and df['ema7'].iloc[-1] < df['ema25'].iloc[-1]
 
