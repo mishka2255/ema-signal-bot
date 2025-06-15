@@ -49,6 +49,13 @@
         <button name="timeframe" value="15m">15 წუთი</button>
     </form>
 
+    <!-- გაჩერების ღილაკი -->
+    <form method="POST" action="/stop">
+        <button type="submit" style="font-size: 22px; padding: 15px 30px; background-color: #ff5555; color: white; border: none; border-radius: 10px;">
+            ⛔ გაჩერება
+        </button>
+    </form>
+
     {% if status.running %}
         <div class="info">
             ⏳ პროცესი დაიწყო — ვამოწმებთ {{ status.tf }} ტაიმფრეიმზე {{ status.total }} ქოინს...
