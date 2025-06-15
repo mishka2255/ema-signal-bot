@@ -22,7 +22,6 @@ status = {
     "finished": False
 }
 
-# შეტყობინების გაგზავნა Telegram-ზე
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     data = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"}
@@ -31,12 +30,10 @@ def send_telegram(message):
     except Exception as e:
         print(f"Telegram შეცდომა: {e}")
 
-# Binance Future ბაზარი
 exchange = ccxt.binance({'options': {'defaultType': 'future'}})
 markets = exchange.load_markets()
 symbols = [s for s in markets if markets[s]['contract'] and markets[s]['quote'] == 'USDT' and markets[s]['active']]
 
-# EMA 7/25 გადაკვეთის შემოწმება
 def check_cross(symbol, tf):
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe=tf, limit=50)
@@ -69,20 +66,13 @@ def check_cross(symbol, tf):
         adx_ok = df['adx'].iloc[-1] > 20
 
         passed = []
-        if volume_ok:
-            passed.append("VOL")
-        if rsi_ok_buy if ema_cross_up else rsi_ok_sell:
-            passed.append("RSI")
-        if is_bullish if ema_cross_up else is_bearish:
-            passed.append("CANDLE")
-        if trend_up if ema_cross_up else trend_down:
-            passed.append("TREND")
-        if atr_ok:
-            passed.append("ATR")
-        if bb_ok:
-            passed.append("BB")
-        if adx_ok:
-            passed.append("ADX")
+        if volume_ok: passed.append("VOL")
+        if rsi_ok_buy if ema_cross_up else rsi_ok_sell: passed.append("RSI")
+        if is_bullish if ema_cross_up else is_bearish: passed.append("CANDLE")
+        if trend_up if ema_cross_up else trend_down: passed.append("TREND")
+        if atr_ok: passed.append("ATR")
+        if bb_ok: passed.append("BB")
+        if adx_ok: passed.append("ADX")
 
         if ema_cross_up or ema_cross_down:
             signal_type = "BUY" if ema_cross_up else "SELL"
@@ -93,7 +83,6 @@ def check_cross(symbol, tf):
         print(f"{symbol} ❌ შეცდომა: {e}")
     return None
 
-# მუდმივი სკანირების ციკლი
 def scan_loop(tf):
     status["running"] = True
     status["tf"] = tf
@@ -126,12 +115,10 @@ def scan_loop(tf):
 
         send_telegram(msg)
 
-# მთავარი გვერდი
 @app.route("/", methods=["GET"])
 def index():
     return render_template("index.html", status=status)
 
-# სკანერის გაშვება
 @app.route("/start", methods=["POST"])
 def start():
     if not status["running"]:
@@ -140,13 +127,11 @@ def start():
         thread.start()
     return render_template("index.html", status=status)
 
-# გაჩერება
 @app.route("/stop", methods=["POST"])
 def stop():
     status["running"] = False
     return render_template("index.html", status=status)
 
-# სტატუსი
 @app.route("/status", methods=["GET"])
 def get_status():
     return {
@@ -156,6 +141,5 @@ def get_status():
         "total": status["total"]
     }
 
-# Flask-ის გაშვება
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=3000)
