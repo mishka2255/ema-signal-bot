@@ -1,5 +1,3 @@
-# --- Flask Python კოდი (app.py) ---
-
 from flask import Flask, render_template, request
 import ccxt
 import pandas as pd
@@ -30,24 +28,37 @@ def send_telegram(message):
     except Exception as e:
         print(f"Telegram შეცდომა: {e}")
 
-exchange = ccxt.binance({'options': {'defaultType': 'future'}})
+exchange = ccxt.binance({"options": {"defaultType": "future"}})
 
 def get_symbols():
-    markets = exchange.load_markets()
-    return [s for s in markets if markets[s].get('contract') and markets[s]['quote'] == 'USDT']
+    try:
+        markets = exchange.load_markets()
+        symbols = [s for s in markets if markets[s].get("contract") and markets[s]["quote"] == "USDT"]
+        print(f"🔁 სულ ფიუჩერსზე არსებული ქოინები: {len(symbols)}")
+        return symbols
+    except Exception as e:
+        print(f"❌ სიმბოლოების წამოღება ვერ მოხერხდა: {e}")
+        return []
 
 def get_direction(symbol, tf):
-    ohlcv = exchange.fetch_ohlcv(symbol, timeframe=tf, limit=50)
-    if len(ohlcv) < 50:
+    try:
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe=tf, limit=50)
+        if len(ohlcv) < 50:
+            return None
+        df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
+        df['ema7'] = ta.trend.ema_indicator(df['close'], window=7)
+        df['ema25'] = ta.trend.ema_indicator(df['close'], window=25)
+        ema7 = df['ema7']
+        ema25 = df['ema25']
+        if ema7.iloc[-2] < ema25.iloc[-2] and ema7.iloc[-1] > ema25.iloc[-1]:
+            return "BUY"
+        elif ema7.iloc[-2] > ema25.iloc[-2] and ema7.iloc[-1] < ema25.iloc[-1]:
+            return "SELL"
+        else:
+            return None
+    except Exception as e:
+        print(f"{symbol} ({tf}) შეცდომა get_direction: {e}")
         return None
-    df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
-    df['ema7'] = ta.trend.ema_indicator(df['close'], window=7)
-    df['ema25'] = ta.trend.ema_indicator(df['close'], window=25)
-    if df['ema7'].iloc[-2] < df['ema25'].iloc[-2] and df['ema7'].iloc[-1] > df['ema25'].iloc[-1]:
-        return "BUY"
-    elif df['ema7'].iloc[-2] > df['ema25'].iloc[-2] and df['ema7'].iloc[-1] < df['ema25'].iloc[-1]:
-        return "SELL"
-    return None
 
 def check_indicators(df):
     try:
@@ -90,9 +101,13 @@ def scan_confirmed(tf_main, tf_confirm):
         for symbol in symbols:
             if not status["running"]:
                 break
+
             try:
                 dir_main = get_direction(symbol, tf_main)
+                time.sleep(0.2)  # დაყოვნება გადაჭარბების თავიდან ასაცილებლად
                 dir_confirm = get_direction(symbol, tf_confirm)
+                time.sleep(0.2)
+
                 if dir_main and dir_main == dir_confirm:
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe=tf_main, limit=50)
                     if len(ohlcv) < 50:
@@ -100,16 +115,18 @@ def scan_confirmed(tf_main, tf_confirm):
                     df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
                     indicators = check_indicators(df)
                     results.append((len(indicators), f"{dir_main}: {symbol} ({' + '.join(indicators)})"))
+
             except Exception as e:
                 print(f"{symbol} შეცდომა: {e}")
-            time.sleep(0.4)
+
+            time.sleep(0.4)  # დამატებითი დაყოვნება Binance API ზღვრის დასაცავად
             status["duration"] = int(time.time() - start)
 
         status["finished"] = True
         if results:
             sorted_results = sorted(results, key=lambda x: -x[0])
             status["results"] = [r[1] for r in sorted_results]
-            msg = f"\U0001F4CA დადასტურებული EMA 7/25 გადაკვეთა ({tf_main} + {tf_confirm})\n\n" + "\n".join(status["results"])
+            msg = f"📊 დადასტურებული EMA 7/25 გადაკვეთა ({tf_main} + {tf_confirm})\n\n" + "\n".join(status["results"])
         else:
             msg = f"ℹ️ არ მოიძებნა დადასტურებული გადაკვეთა\nდრო: {status['duration']} წმ"
 
@@ -128,7 +145,7 @@ def start():
         elif tf == "15m-confirmed":
             thread = threading.Thread(target=scan_confirmed, args=("15m", "1h"))
         else:
-            thread = threading.Thread(target=scan_confirmed, args=(tf, "1h"))
+            thread = threading.Thread(target=scan_loop, args=(tf,))
         thread.start()
     return render_template("index.html", status=status)
 
