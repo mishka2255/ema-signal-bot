@@ -30,10 +30,12 @@ def send_telegram(message):
 
 exchange = ccxt.binance({'options': {'defaultType': 'future'}})
 markets = exchange.load_markets()
-symbols = [s for s in markets if markets[s]['contract'] and markets[s]['quote'] == 'USDT' and markets[s]['active']]
+symbols = [s for s in markets if markets[s].get('contract') and markets[s]['quote'] == 'USDT']
 
 def get_direction(symbol, tf):
     ohlcv = exchange.fetch_ohlcv(symbol, timeframe=tf, limit=50)
+    if len(ohlcv) < 50:
+        return None
     df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
     df['ema7'] = ta.trend.ema_indicator(df['close'], window=7)
     df['ema25'] = ta.trend.ema_indicator(df['close'], window=25)
@@ -79,6 +81,11 @@ def scan_confirmed():
         start = time.time()
         results = []
 
+        global markets, symbols
+        markets = exchange.load_markets()
+        symbols = [s for s in markets if markets[s].get('contract') and markets[s]['quote'] == 'USDT']
+        status["total"] = len(symbols)
+
         for symbol in symbols:
             if not status["running"]:
                 break
@@ -88,7 +95,10 @@ def scan_confirmed():
                 direction_1h = get_direction(symbol, "1h")
 
                 if direction_1h and direction_1h == direction_1d:
-                    df = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe="1h", limit=50), columns=['timestamp','open','high','low','close','volume'])
+                    ohlcv = exchange.fetch_ohlcv(symbol, timeframe="1h", limit=50)
+                    if len(ohlcv) < 50:
+                        continue
+                    df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
                     indicators = check_indicators(df)
                     results.append((len(indicators), f"{direction_1h}: {symbol} ({' + '.join(indicators)})"))
 
@@ -135,7 +145,8 @@ def get_status():
         "running": status["running"],
         "duration": status["duration"],
         "finished": status["finished"],
-        "total": status["total"]
+        "total": status["total"],
+        "symbol_count": len(symbols)
     }
 
 if __name__ == "__main__":
