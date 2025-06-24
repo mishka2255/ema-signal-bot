@@ -119,7 +119,7 @@ def scan_confirmed(tf_main, tf_confirm):
             msg = f"ℹ️ არ მოიძებნა დადასტურებული გადაკვეთა\nდრო: {status['duration']} წმ"
 
         send_telegram(msg)
-        # აღარ ველოდებით — ციკლი თავიდან იწყება მაშინვე
+        time.sleep(5)  # მცირე პაუზა ყოველი ციკლის შემდეგ
 
 @app.route("/", methods=["GET"])
 def index():
