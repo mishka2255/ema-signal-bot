@@ -29,8 +29,10 @@ def send_telegram(message):
         print(f"Telegram შეცდომა: {e}")
 
 exchange = ccxt.binance({'options': {'defaultType': 'future'}})
-markets = exchange.load_markets()
-symbols = [s for s in markets if markets[s].get('contract') and markets[s]['quote'] == 'USDT']
+
+def get_symbols():
+    markets = exchange.load_markets()
+    return [s for s in markets if markets[s].get('contract') and markets[s]['quote'] == 'USDT']
 
 def get_direction(symbol, tf):
     ohlcv = exchange.fetch_ohlcv(symbol, timeframe=tf, limit=50)
@@ -50,6 +52,8 @@ def get_direction(symbol, tf):
 
 def check_indicators(df):
     try:
+        df['ema7'] = ta.trend.ema_indicator(df['close'], window=7)
+        df['ema25'] = ta.trend.ema_indicator(df['close'], window=25)
         df['rsi'] = ta.momentum.RSIIndicator(df['close'], window=14).rsi()
         df['volume_avg'] = df['volume'].rolling(window=20).mean()
         df['atr'] = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close']).average_true_range()
@@ -70,37 +74,35 @@ def check_indicators(df):
     except:
         return []
 
-def scan_confirmed():
+def scan_confirmed(tf_main, tf_confirm):
     status["running"] = True
-    status["tf"] = "1h-confirmed"
+    status["tf"] = tf_main + "-confirmed"
 
     while status["running"]:
+        symbols = get_symbols()
+        status["total"] = len(symbols)
         status["results"] = []
         status["finished"] = False
         status["duration"] = 0
+
         start = time.time()
         results = []
-
-        global markets, symbols
-        markets = exchange.load_markets()
-        symbols = [s for s in markets if markets[s].get('contract') and markets[s]['quote'] == 'USDT']
-        status["total"] = len(symbols)
 
         for symbol in symbols:
             if not status["running"]:
                 break
 
             try:
-                direction_1d = get_direction(symbol, "1d")
-                direction_1h = get_direction(symbol, "1h")
+                dir_main = get_direction(symbol, tf_main)
+                dir_confirm = get_direction(symbol, tf_confirm)
 
-                if direction_1h and direction_1h == direction_1d:
-                    ohlcv = exchange.fetch_ohlcv(symbol, timeframe="1h", limit=50)
+                if dir_main and dir_main == dir_confirm:
+                    ohlcv = exchange.fetch_ohlcv(symbol, timeframe=tf_main, limit=50)
                     if len(ohlcv) < 50:
                         continue
                     df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
                     indicators = check_indicators(df)
-                    results.append((len(indicators), f"{direction_1h}: {symbol} ({' + '.join(indicators)})"))
+                    results.append((len(indicators), f"{dir_main}: {symbol} ({' + '.join(indicators)})"))
 
             except Exception as e:
                 print(f"{symbol} შეცდომა: {e}")
@@ -112,12 +114,12 @@ def scan_confirmed():
         if results:
             sorted_results = sorted(results, key=lambda x: -x[0])
             status["results"] = [r[1] for r in sorted_results]
-            msg = f"📊 დადასტურებული EMA 7/25 გადაკვეთა (1h + 1d)\n\n" + "\n".join(status["results"])
+            msg = f"📊 დადასტურებული EMA 7/25 გადაკვეთა ({tf_main} + {tf_confirm})\n\n" + "\n".join(status["results"])
         else:
             msg = f"ℹ️ არ მოიძებნა დადასტურებული გადაკვეთა\nდრო: {status['duration']} წმ"
 
         send_telegram(msg)
-        time.sleep(60)
+        # აღარ ველოდებით — ციკლი თავიდან იწყება მაშინვე
 
 @app.route("/", methods=["GET"])
 def index():
@@ -128,7 +130,9 @@ def start():
     if not status["running"]:
         tf = request.form.get("timeframe")
         if tf == "1h-confirmed":
-            thread = threading.Thread(target=scan_confirmed)
+            thread = threading.Thread(target=scan_confirmed, args=("1h", "1d"))
+        elif tf == "15m-confirmed":
+            thread = threading.Thread(target=scan_confirmed, args=("15m", "1h"))
         else:
             thread = threading.Thread(target=scan_loop, args=(tf,))
         thread.start()
@@ -145,8 +149,7 @@ def get_status():
         "running": status["running"],
         "duration": status["duration"],
         "finished": status["finished"],
-        "total": status["total"],
-        "symbol_count": len(symbols)
+        "total": status["total"]
     }
 
 if __name__ == "__main__":
