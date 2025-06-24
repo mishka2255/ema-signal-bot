@@ -74,6 +74,49 @@ def check_indicators(df):
     except:
         return []
 
+def scan_loop(tf):
+    status["running"] = True
+    status["tf"] = tf
+
+    while status["running"]:
+        symbols = get_symbols()
+        status["total"] = len(symbols)
+        status["results"] = []
+        status["finished"] = False
+        status["duration"] = 0
+
+        start = time.time()
+        results = []
+
+        for symbol in symbols:
+            if not status["running"]:
+                break
+
+            try:
+                dir_signal = get_direction(symbol, tf)
+                if dir_signal:
+                    ohlcv = exchange.fetch_ohlcv(symbol, timeframe=tf, limit=50)
+                    if len(ohlcv) < 50:
+                        continue
+                    df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
+                    indicators = check_indicators(df)
+                    results.append((len(indicators), f"{dir_signal}: {symbol} ({' + '.join(indicators)})"))
+            except Exception as e:
+                print(f"{symbol} შეცდომა: {e}")
+
+            time.sleep(0.4)
+            status["duration"] = int(time.time() - start)
+
+        status["finished"] = True
+        if results:
+            sorted_results = sorted(results, key=lambda x: -x[0])
+            status["results"] = [r[1] for r in sorted_results]
+            msg = f"📊 EMA 7/25 გადაკვეთა ({tf})\n\n" + "\n".join(status["results"])
+        else:
+            msg = f"❌ არ მოიძებნა გადაკვეთა\nტაიმფრეიმი: {tf}"
+
+        send_telegram(msg)
+
 def scan_confirmed(tf_main, tf_confirm):
     status["running"] = True
     status["tf"] = tf_main + "-confirmed"
@@ -103,7 +146,6 @@ def scan_confirmed(tf_main, tf_confirm):
                     df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
                     indicators = check_indicators(df)
                     results.append((len(indicators), f"{dir_main}: {symbol} ({' + '.join(indicators)})"))
-
             except Exception as e:
                 print(f"{symbol} შეცდომა: {e}")
 
@@ -114,12 +156,11 @@ def scan_confirmed(tf_main, tf_confirm):
         if results:
             sorted_results = sorted(results, key=lambda x: -x[0])
             status["results"] = [r[1] for r in sorted_results]
-            msg = f"\ud83d\udcca დადასტურებული EMA 7/25 გადაკვეთა ({tf_main} + {tf_confirm})\n\n" + "\n".join(status["results"])
+            msg = f"📊 დადასტურებული EMA გადაკვეთა ({tf_main}+{tf_confirm})\n\n" + "\n".join(status["results"])
         else:
-            msg = f"\u2139\ufe0f არ მოიძებნა დადასტურებული გადაკვეთა\nდრო: {status['duration']} წმ"
+            msg = f"❌ არ მოიძებნა დადასტურებული სიგნალი\nტაიმფრეიმი: {tf_main}+{tf_confirm}"
 
         send_telegram(msg)
-        time.sleep(1)  # მცირე პაუზა ციკლს შორის
 
 @app.route("/", methods=["GET"])
 def index():
@@ -133,8 +174,12 @@ def start():
             thread = threading.Thread(target=scan_confirmed, args=("1h", "1d"))
         elif tf == "15m-confirmed":
             thread = threading.Thread(target=scan_confirmed, args=("15m", "1h"))
+        elif tf == "5m":
+            thread = threading.Thread(target=scan_loop, args=("5m",))
+        elif tf == "15m":
+            thread = threading.Thread(target=scan_loop, args=("15m",))
         else:
-            send_telegram(f"\u274c უცნობი ტაიმფრეიმი: {tf}")
+            send_telegram(f"❌ უცნობი ტაიმფრეიმი: {tf}")
             return render_template("index.html", status=status)
         thread.start()
     return render_template("index.html", status=status)
@@ -154,4 +199,4 @@ def get_status():
     }
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=3000, debug=True)
+    app.run(host="0.0.0.0", port=3000)
