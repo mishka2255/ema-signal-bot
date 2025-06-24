@@ -28,36 +28,26 @@ def send_telegram(message):
     except Exception as e:
         print(f"Telegram შეცდომა: {e}")
 
-exchange = ccxt.binance({"options": {"defaultType": "future"}})
+exchange = ccxt.binance({'options': {'defaultType': 'future'}})
 
 def get_symbols():
-    try:
-        markets = exchange.load_markets()
-        symbols = [s for s in markets if markets[s].get("contract") and markets[s]["quote"] == "USDT"]
-        print(f"🔁 სულ ფიუჩერსზე არსებული ქოინები: {len(symbols)}")
-        return symbols
-    except Exception as e:
-        print(f"❌ სიმბოლოების წამოღება ვერ მოხერხდა: {e}")
-        return []
+    markets = exchange.load_markets()
+    return [s for s in markets if markets[s].get('contract') and markets[s]['quote'] == 'USDT']
 
 def get_direction(symbol, tf):
-    try:
-        ohlcv = exchange.fetch_ohlcv(symbol, timeframe=tf, limit=50)
-        if len(ohlcv) < 50:
-            return None
-        df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
-        df['ema7'] = ta.trend.ema_indicator(df['close'], window=7)
-        df['ema25'] = ta.trend.ema_indicator(df['close'], window=25)
-        ema7 = df['ema7']
-        ema25 = df['ema25']
-        if ema7.iloc[-2] < ema25.iloc[-2] and ema7.iloc[-1] > ema25.iloc[-1]:
-            return "BUY"
-        elif ema7.iloc[-2] > ema25.iloc[-2] and ema7.iloc[-1] < ema25.iloc[-1]:
-            return "SELL"
-        else:
-            return None
-    except Exception as e:
-        print(f"{symbol} ({tf}) შეცდომა get_direction: {e}")
+    ohlcv = exchange.fetch_ohlcv(symbol, timeframe=tf, limit=50)
+    if len(ohlcv) < 50:
+        return None
+    df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
+    df['ema7'] = ta.trend.ema_indicator(df['close'], window=7)
+    df['ema25'] = ta.trend.ema_indicator(df['close'], window=25)
+    ema7 = df['ema7']
+    ema25 = df['ema25']
+    if ema7.iloc[-2] < ema25.iloc[-2] and ema7.iloc[-1] > ema25.iloc[-1]:
+        return "BUY"
+    elif ema7.iloc[-2] > ema25.iloc[-2] and ema7.iloc[-1] < ema25.iloc[-1]:
+        return "SELL"
+    else:
         return None
 
 def check_indicators(df):
@@ -104,9 +94,7 @@ def scan_confirmed(tf_main, tf_confirm):
 
             try:
                 dir_main = get_direction(symbol, tf_main)
-                time.sleep(0.2)  # დაყოვნება გადაჭარბების თავიდან ასაცილებლად
                 dir_confirm = get_direction(symbol, tf_confirm)
-                time.sleep(0.2)
 
                 if dir_main and dir_main == dir_confirm:
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe=tf_main, limit=50)
@@ -119,18 +107,19 @@ def scan_confirmed(tf_main, tf_confirm):
             except Exception as e:
                 print(f"{symbol} შეცდომა: {e}")
 
-            time.sleep(0.4)  # დამატებითი დაყოვნება Binance API ზღვრის დასაცავად
+            time.sleep(0.4)
             status["duration"] = int(time.time() - start)
 
         status["finished"] = True
         if results:
             sorted_results = sorted(results, key=lambda x: -x[0])
             status["results"] = [r[1] for r in sorted_results]
-            msg = f"📊 დადასტურებული EMA 7/25 გადაკვეთა ({tf_main} + {tf_confirm})\n\n" + "\n".join(status["results"])
+            msg = f"\ud83d\udcca დადასტურებული EMA 7/25 გადაკვეთა ({tf_main} + {tf_confirm})\n\n" + "\n".join(status["results"])
         else:
-            msg = f"ℹ️ არ მოიძებნა დადასტურებული გადაკვეთა\nდრო: {status['duration']} წმ"
+            msg = f"\u2139\ufe0f არ მოიძებნა დადასტურებული გადაკვეთა\nდრო: {status['duration']} წმ"
 
         send_telegram(msg)
+        time.sleep(1)  # მცირე პაუზა ციკლს შორის
 
 @app.route("/", methods=["GET"])
 def index():
@@ -145,7 +134,8 @@ def start():
         elif tf == "15m-confirmed":
             thread = threading.Thread(target=scan_confirmed, args=("15m", "1h"))
         else:
-            thread = threading.Thread(target=scan_loop, args=(tf,))
+            send_telegram(f"\u274c უცნობი ტაიმფრეიმი: {tf}")
+            return render_template("index.html", status=status)
         thread.start()
     return render_template("index.html", status=status)
 
@@ -164,4 +154,4 @@ def get_status():
     }
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=3000)
+    app.run(host="0.0.0.0", port=3000, debug=True)
