@@ -71,41 +71,43 @@ def check_indicators(df):
 def scan_confirmed():
     status["running"] = True
     status["tf"] = "1h-confirmed"
-    status["results"] = []
-    status["finished"] = False
-    status["duration"] = 0
 
-    start = time.time()
-    results = []
+    while status["running"]:
+        status["results"] = []
+        status["finished"] = False
+        status["duration"] = 0
+        start = time.time()
+        results = []
 
-    for symbol in symbols:
-        if not status["running"]:
-            break
+        for symbol in symbols:
+            if not status["running"]:
+                break
 
-        try:
-            direction_1d = get_direction(symbol, "1d")
-            direction_1h = get_direction(symbol, "1h")
+            try:
+                direction_1d = get_direction(symbol, "1d")
+                direction_1h = get_direction(symbol, "1h")
 
-            if direction_1h and direction_1h == direction_1d:
-                df = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe="1h", limit=50), columns=['timestamp','open','high','low','close','volume'])
-                indicators = check_indicators(df)
-                results.append((len(indicators), f"{direction_1h}: {symbol} ({' + '.join(indicators)})"))
+                if direction_1h and direction_1h == direction_1d:
+                    df = pd.DataFrame(exchange.fetch_ohlcv(symbol, timeframe="1h", limit=50), columns=['timestamp','open','high','low','close','volume'])
+                    indicators = check_indicators(df)
+                    results.append((len(indicators), f"{direction_1h}: {symbol} ({' + '.join(indicators)})"))
 
-        except Exception as e:
-            print(f"{symbol} შეცდომა: {e}")
+            except Exception as e:
+                print(f"{symbol} შეცდომა: {e}")
 
-        time.sleep(0.4)
-        status["duration"] = int(time.time() - start)
+            time.sleep(0.4)
+            status["duration"] = int(time.time() - start)
 
-    status["finished"] = True
-    if results:
-        sorted_results = sorted(results, key=lambda x: -x[0])
-        status["results"] = [r[1] for r in sorted_results]
-        msg = f"📊 დადასტურებული EMA 7/25 გადაკვეთა (1h + 1d)\n\n" + "\n".join(status["results"])
-    else:
-        msg = f"ℹ️ არ მოიძებნა დადასტურებული გადაკვეთა\nდრო: {status['duration']} წმ"
+        status["finished"] = True
+        if results:
+            sorted_results = sorted(results, key=lambda x: -x[0])
+            status["results"] = [r[1] for r in sorted_results]
+            msg = f"📊 დადასტურებული EMA 7/25 გადაკვეთა (1h + 1d)\n\n" + "\n".join(status["results"])
+        else:
+            msg = f"ℹ️ არ მოიძებნა დადასტურებული გადაკვეთა\nდრო: {status['duration']} წმ"
 
-    send_telegram(msg)
+        send_telegram(msg)
+        time.sleep(60)
 
 @app.route("/", methods=["GET"])
 def index():
