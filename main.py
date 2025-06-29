@@ -111,54 +111,9 @@ def scan_loop(tf):
         if results:
             sorted_results = sorted(results, key=lambda x: -x[0])
             status["results"] = [r[1] for r in sorted_results]
-            msg = f"📊 EMA 7/25 გადაკვეთა ({tf})\n\n" + "\n".join(status["results"])
+            msg = f"\U0001F4CA EMA 7/25 გადაკვეთა ({tf})\n\n" + "\n".join(status["results"])
         else:
-            msg = f"❌ არ მოიძებნა გადაკვეთა\nტაიმფრეიმი: {tf}"
-
-        send_telegram(msg)
-
-def scan_confirmed(tf_main, tf_confirm):
-    status["running"] = True
-    status["tf"] = tf_main + "-confirmed"
-
-    while status["running"]:
-        symbols = get_symbols()
-        status["total"] = len(symbols)
-        status["results"] = []
-        status["finished"] = False
-        status["duration"] = 0
-
-        start = time.time()
-        results = []
-
-        for symbol in symbols:
-            if not status["running"]:
-                break
-
-            try:
-                dir_main = get_direction(symbol, tf_main)
-                dir_confirm = get_direction(symbol, tf_confirm)
-
-                if dir_main and dir_main == dir_confirm:
-                    ohlcv = exchange.fetch_ohlcv(symbol, timeframe=tf_main, limit=50)
-                    if len(ohlcv) < 50:
-                        continue
-                    df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
-                    indicators = check_indicators(df)
-                    results.append((len(indicators), f"{dir_main}: {symbol} ({' + '.join(indicators)})"))
-            except Exception as e:
-                print(f"{symbol} შეცდომა: {e}")
-
-            time.sleep(0.4)
-            status["duration"] = int(time.time() - start)
-
-        status["finished"] = True
-        if results:
-            sorted_results = sorted(results, key=lambda x: -x[0])
-            status["results"] = [r[1] for r in sorted_results]
-            msg = f"📊 დადასტურებული EMA გადაკვეთა ({tf_main}+{tf_confirm})\n\n" + "\n".join(status["results"])
-        else:
-            msg = f"❌ არ მოიძებნა დადასტურებული სიგნალი\nტაიმფრეიმი: {tf_main}+{tf_confirm}"
+            msg = f"\u274C არ მოიძებნა გადაკვეთა\nტაიმფრეიმი: {tf}"
 
         send_telegram(msg)
 
@@ -171,7 +126,7 @@ def start():
     if not status["running"]:
         tf = request.form.get("timeframe")
         if tf == "1h-confirmed":
-            thread = threading.Thread(target=scan_confirmed, args=("1h", "1d"))
+            thread = threading.Thread(target=scan_loop, args=("1h",))
         elif tf == "15m-confirmed":
             thread = threading.Thread(target=scan_confirmed, args=("15m", "1h"))
         elif tf == "5m":
@@ -179,7 +134,7 @@ def start():
         elif tf == "15m":
             thread = threading.Thread(target=scan_loop, args=("15m",))
         else:
-            send_telegram(f"❌ უცნობი ტაიმფრეიმი: {tf}")
+            send_telegram(f"\u274C უცნობი ტაიმფრეიმი: {tf}")
             return render_template("index.html", status=status)
         thread.start()
     return render_template("index.html", status=status)
