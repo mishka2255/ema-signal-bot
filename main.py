@@ -31,10 +31,15 @@ def send_telegram(message):
 exchange = ccxt.binance({'options': {'defaultType': 'future'}})
 
 def get_symbols():
-    markets = exchange.load_markets()
-    return [s for s in markets if markets[s].get('contract') and markets[s]['quote'] == 'USDT']
+    try:
+        markets = exchange.load_markets()
+        symbols = [s for s in markets if markets[s].get('contract') and markets[s]['quote'] == 'USDT']
+        print(f"🔍 ამოღებული ქოინების რაოდენობა: {len(symbols)}")
+        return symbols
+    except Exception as e:
+        print(f"❌ get_symbols შეცდომა: {e}")
+        return []
 
-# ✅ განახლებული ლოგიკა მხოლოდ 1 საათიანზე
 def get_direction_confirmed(symbol, tf):
     ohlcv = exchange.fetch_ohlcv(symbol, timeframe=tf, limit=52)
     if len(ohlcv) < 52:
@@ -62,7 +67,6 @@ def get_direction_confirmed(symbol, tf):
 
     return None
 
-# 🔄 ძველი ლოგიკა 15m, 5m და სხვა ტაიმფრეიმებისთვის
 def get_direction(symbol, tf):
     ohlcv = exchange.fetch_ohlcv(symbol, timeframe=tf, limit=50)
     if len(ohlcv) < 50:
@@ -122,7 +126,6 @@ def scan_loop(tf):
                 break
 
             try:
-                # ✅ აქ ხდება განსხვავება — 1h-confirmed შემთხვევაში სხვა ფუნქცია გამოიძახე
                 if tf == "1h-confirmed":
                     dir_signal = get_direction_confirmed(symbol, "1h")
                 else:
@@ -139,9 +142,10 @@ def scan_loop(tf):
                 print(f"{symbol} შეცდომა: {e}")
 
             time.sleep(0.4)
-            status["duration"] = int(time.time() - start)
 
+        status["duration"] = int(time.time() - start)
         status["finished"] = True
+
         if results:
             sorted_results = sorted(results, key=lambda x: -x[0])
             status["results"] = [r[1] for r in sorted_results]
@@ -150,6 +154,9 @@ def scan_loop(tf):
             msg = f"\u274C არ მოიძებნა გადაკვეთა\nტაიმფრეიმი: {tf}"
 
         send_telegram(msg)
+
+        # დაელოდოს 5 წუთი შემდეგ რაუნდამდე
+        time.sleep(300)
 
 @app.route("/", methods=["GET"])
 def index():
