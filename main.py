@@ -34,6 +34,35 @@ def get_symbols():
     markets = exchange.load_markets()
     return [s for s in markets if markets[s].get('contract') and markets[s]['quote'] == 'USDT']
 
+# ✅ განახლებული ლოგიკა მხოლოდ 1 საათიანზე
+def get_direction_confirmed(symbol, tf):
+    ohlcv = exchange.fetch_ohlcv(symbol, timeframe=tf, limit=52)
+    if len(ohlcv) < 52:
+        return None
+
+    df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
+    df['ema7'] = ta.trend.ema_indicator(df['close'], window=7)
+    df['ema25'] = ta.trend.ema_indicator(df['close'], window=25)
+
+    ema7_prev = df['ema7'].iloc[-3]
+    ema25_prev = df['ema25'].iloc[-3]
+    ema7_curr = df['ema7'].iloc[-2]
+    ema25_curr = df['ema25'].iloc[-2]
+
+    candle = df.iloc[-2]
+    prev_candle = df.iloc[-3]
+
+    if ema7_prev < ema25_prev and ema7_curr > ema25_curr:
+        if candle['high'] > prev_candle['high'] and candle['close'] > candle['open']:
+            return "BUY"
+
+    if ema7_prev > ema25_prev and ema7_curr < ema25_curr:
+        if candle['low'] < prev_candle['low'] and candle['close'] < candle['open']:
+            return "SELL"
+
+    return None
+
+# 🔄 ძველი ლოგიკა 15m, 5m და სხვა ტაიმფრეიმებისთვის
 def get_direction(symbol, tf):
     ohlcv = exchange.fetch_ohlcv(symbol, timeframe=tf, limit=50)
     if len(ohlcv) < 50:
@@ -93,7 +122,12 @@ def scan_loop(tf):
                 break
 
             try:
-                dir_signal = get_direction(symbol, tf)
+                # ✅ აქ ხდება განსხვავება — 1h-confirmed შემთხვევაში სხვა ფუნქცია გამოიძახე
+                if tf == "1h-confirmed":
+                    dir_signal = get_direction_confirmed(symbol, "1h")
+                else:
+                    dir_signal = get_direction(symbol, tf)
+
                 if dir_signal:
                     ohlcv = exchange.fetch_ohlcv(symbol, timeframe=tf, limit=50)
                     if len(ohlcv) < 50:
@@ -125,17 +159,7 @@ def index():
 def start():
     if not status["running"]:
         tf = request.form.get("timeframe")
-        if tf == "1h-confirmed":
-            thread = threading.Thread(target=scan_loop, args=("1h",))
-        elif tf == "15m-confirmed":
-            thread = threading.Thread(target=scan_confirmed, args=("15m", "1h"))
-        elif tf == "5m":
-            thread = threading.Thread(target=scan_loop, args=("5m",))
-        elif tf == "15m":
-            thread = threading.Thread(target=scan_loop, args=("15m",))
-        else:
-            send_telegram(f"\u274C უცნობი ტაიმფრეიმი: {tf}")
-            return render_template("index.html", status=status)
+        thread = threading.Thread(target=scan_loop, args=(tf,))
         thread.start()
     return render_template("index.html", status=status)
 
