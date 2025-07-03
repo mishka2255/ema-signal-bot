@@ -8,8 +8,9 @@ import threading
 
 app = Flask(__name__)
 
-BOT_TOKEN = "შენი_ბოტის_ტოკენი"
-CHAT_ID = "შენი_ჩათ_აიდი"
+# შენი Telegram Token და Chat ID
+BOT_TOKEN = "8158204187:AAFPEApXyE_ot0pz3J23b1h5ubJ82El5gLc"
+CHAT_ID = "7465722084"
 
 status = {
     "running": False,
@@ -34,9 +35,10 @@ def get_symbols():
     try:
         markets = exchange.load_markets()
         symbols = [s for s in markets if markets[s].get('contract') and markets[s]['quote'] == 'USDT']
+        print(f"🔍 ქოინების რაოდენობა: {len(symbols)}")
         return symbols
     except Exception as e:
-        print(f"get_symbols შეცდომა: {e}")
+        print(f"❌ get_symbols შეცდომა: {e}")
         return []
 
 def check_indicators(df):
@@ -63,6 +65,30 @@ def check_indicators(df):
     except:
         return []
 
+def is_confirmed_after_cross(df):
+    df['ema7'] = ta.trend.ema_indicator(df['close'], window=7)
+    df['ema25'] = ta.trend.ema_indicator(df['close'], window=25)
+
+    ema7_prev = df['ema7'].iloc[-3]
+    ema25_prev = df['ema25'].iloc[-3]
+    ema7_cross = df['ema7'].iloc[-2]
+    ema25_cross = df['ema25'].iloc[-2]
+
+    # ქვემოდან ზემოთ გადაკვეთა — BUY
+    if ema7_prev < ema25_prev and ema7_cross > ema25_cross:
+        # 1 ან 2 წითელი სანთელი გადაკვეთის შემდეგ
+        red_count = sum(df.iloc[-i]['close'] < df.iloc[-i]['open'] for i in [1,2])
+        if red_count >= 1:
+            return "BUY"
+
+    # ზემოდან ქვემოთ გადაკვეთა — SELL
+    elif ema7_prev > ema25_prev and ema7_cross < ema25_cross:
+        green_count = sum(df.iloc[-i]['close'] > df.iloc[-i]['open'] for i in [1,2])
+        if green_count >= 1:
+            return "SELL"
+
+    return None
+
 def scan_loop(tf):
     status["running"] = True
     status["tf"] = tf
@@ -80,65 +106,34 @@ def scan_loop(tf):
         for symbol in symbols:
             if not status["running"]:
                 break
-
             try:
-                ohlcv = exchange.fetch_ohlcv(symbol, timeframe=tf, limit=52)
+                ohlcv = exchange.fetch_ohlcv(symbol, timeframe="1h", limit=52)
                 if len(ohlcv) < 52:
                     continue
 
                 df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
-                df['ema7'] = ta.trend.ema_indicator(df['close'], window=7)
-                df['ema25'] = ta.trend.ema_indicator(df['close'], window=25)
+                dir_signal = is_confirmed_after_cross(df)
 
-                ema7_prev = df['ema7'].iloc[-3]
-                ema25_prev = df['ema25'].iloc[-3]
-                ema7_curr = df['ema7'].iloc[-2]
-                ema25_curr = df['ema25'].iloc[-2]
-
-                candle = df.iloc[-2]
-                prev_candle = df.iloc[-3]
-
-                direction = None
-                if ema7_prev < ema25_prev and ema7_curr > ema25_curr:
-                    if candle['high'] > prev_candle['high'] and candle['close'] > candle['open']:
-                        direction = "BUY"
-
-                elif ema7_prev > ema25_prev and ema7_curr < ema25_curr:
-                    if candle['low'] < prev_candle['low'] and candle['close'] < candle['open']:
-                        direction = "SELL"
-
-                if direction:
+                if dir_signal:
                     indicators = check_indicators(df)
-                    results.append({
-                        "symbol": symbol,
-                        "direction": direction,
-                        "indicators": indicators,
-                        "match_count": len(indicators)
-                    })
-
+                    results.append((len(indicators), f"{dir_signal}: {symbol} ({' + '.join(indicators)})"))
             except Exception as e:
                 print(f"{symbol} შეცდომა: {e}")
-
-            time.sleep(0.4)
+            time.sleep(0.3)
 
         status["duration"] = int(time.time() - start)
         status["finished"] = True
 
         if results:
-            sorted_results = sorted(results, key=lambda x: -x['match_count'])
-            best = sorted_results[0]
-            lines = [f"📊 საუკეთესო ქოინი: {best['symbol']} ({best['match_count']} ინდიკატორი)\n" +
-                     " + ".join(best['indicators']) + "\n"]
-
-            for r in sorted_results:
-                lines.append(f"✅ {r['direction']}: {r['symbol']} ({' + '.join(r['indicators'])})")
-
-            msg = f"📈 EMA 7/25 გადაკვეთა ({tf})\n\n" + "\n".join(lines)
+            sorted_results = sorted(results, key=lambda x: -x[0])
+            status["results"] = [r[1] for r in sorted_results]
+            msg = f"📊 EMA 7/25 გადაკვეთა 1სთ (დადასტურებული)\n\n" + "\n".join(status["results"])
         else:
-            msg = f"❌ არ მოიძებნა გადაკვეთა\nტაიმფრეიმი: {tf}\nშემოწმდა: {len(symbols)} ქოინი"
+            msg = "❌ არ მოიძებნა გადაკვეთა\nტაიმფრეიმი: 1h-confirmed"
 
         send_telegram(msg)
-        time.sleep(300)
+
+        time.sleep(300)  # 5 წუთი
 
 @app.route("/", methods=["GET"])
 def index():
