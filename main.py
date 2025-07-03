@@ -32,9 +32,12 @@ exchange = ccxt.binance({'options': {'defaultType': 'future'}})
 
 def get_symbols():
     try:
-        markets = exchange.load_markets()
-        symbols = [s for s in markets if markets[s].get('contract') and markets[s]['quote'] == 'USDT']
-        print(f"🔍 ამოღებული ქოინების რაოდენობა: {len(symbols)}")
+        exchange.load_markets()
+        symbols = [
+            s for s in exchange.symbols
+            if 'USDT' in s and "/USDT" in s and exchange.markets[s].get('contract')
+        ]
+        print(f"🔍 ამოღებულია {len(symbols)} ქოინი.")
         return symbols
     except Exception as e:
         print(f"❌ get_symbols შეცდომა: {e}")
@@ -111,6 +114,10 @@ def scan_loop(tf):
     status["running"] = True
     status["tf"] = tf
 
+    # ✅ ვაჩვენებთ სიმბოლოების რაოდენობას UI-ში იმ წამსვე
+    symbols = get_symbols()
+    status["total"] = len(symbols)
+
     while status["running"]:
         symbols = get_symbols()
         status["total"] = len(symbols)
@@ -155,8 +162,7 @@ def scan_loop(tf):
 
         send_telegram(msg)
 
-        # დაელოდოს 5 წუთი შემდეგ რაუნდამდე
-        time.sleep(300)
+        time.sleep(300)  # 5 წუთიანი პაუზა
 
 @app.route("/", methods=["GET"])
 def index():
