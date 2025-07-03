@@ -8,10 +8,11 @@ import threading
 
 app = Flask(__name__)
 
-# შენი Telegram Token და Chat ID
+# Telegram პარამეტრები
 BOT_TOKEN = "8158204187:AAFPEApXyE_ot0pz3J23b1h5ubJ82El5gLc"
 CHAT_ID = "7465722084"
 
+# სტატუსის ობიექტი
 status = {
     "running": False,
     "tf": "",
@@ -29,6 +30,7 @@ def send_telegram(message):
     except Exception as e:
         print(f"Telegram შეცდომა: {e}")
 
+# Binance Futures
 exchange = ccxt.binance({'options': {'defaultType': 'future'}})
 
 def get_symbols():
@@ -74,17 +76,16 @@ def is_confirmed_after_cross(df):
     ema7_cross = df['ema7'].iloc[-2]
     ema25_cross = df['ema25'].iloc[-2]
 
-    # ქვემოდან ზემოთ გადაკვეთა — BUY
+    # BUY გადაკვეთა — ოვერ ლოუს შემდეგ
     if ema7_prev < ema25_prev and ema7_cross > ema25_cross:
-        # 1 ან 2 წითელი სანთელი გადაკვეთის შემდეგ
-        red_count = sum(df.iloc[-i]['close'] < df.iloc[-i]['open'] for i in [1,2])
-        if red_count >= 1:
+        red_count = sum(df.iloc[-i]['close'] < df.iloc[-i]['open'] for i in [1, 2])
+        if red_count in [1, 2]:
             return "BUY"
 
-    # ზემოდან ქვემოთ გადაკვეთა — SELL
+    # SELL გადაკვეთა — ოვერ ჰაის შემდეგ
     elif ema7_prev > ema25_prev and ema7_cross < ema25_cross:
-        green_count = sum(df.iloc[-i]['close'] > df.iloc[-i]['open'] for i in [1,2])
-        if green_count >= 1:
+        green_count = sum(df.iloc[-i]['close'] > df.iloc[-i]['open'] for i in [1, 2])
+        if green_count in [1, 2]:
             return "SELL"
 
     return None
@@ -132,8 +133,7 @@ def scan_loop(tf):
             msg = "❌ არ მოიძებნა გადაკვეთა\nტაიმფრეიმი: 1h-confirmed"
 
         send_telegram(msg)
-
-        time.sleep(300)  # 5 წუთი
+        time.sleep(300)  # ყოველ 5 წუთში ერთხელ
 
 @app.route("/", methods=["GET"])
 def index():
