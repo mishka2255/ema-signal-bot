@@ -8,8 +8,8 @@ import threading
 
 app = Flask(__name__)
 
-BOT_TOKEN = "8158204187:AAFPEApXyE_ot0pz3J23b1h5ubJ82El5gLc"
-CHAT_ID = "7465722084"
+BOT_TOKEN = "შენი_ბოტის_ტოკენი"
+CHAT_ID = "შენი_ჩათ_აიდი"
 
 status = {
     "running": False,
@@ -32,59 +32,12 @@ exchange = ccxt.binance({'options': {'defaultType': 'future'}})
 
 def get_symbols():
     try:
-        exchange.load_markets()
-        symbols = [
-            s for s in exchange.symbols
-            if 'USDT' in s and "/USDT" in s and exchange.markets[s].get('contract')
-        ]
-        print(f"🔍 ამოღებულია {len(symbols)} ქოინი.")
+        markets = exchange.load_markets()
+        symbols = [s for s in markets if markets[s].get('contract') and markets[s]['quote'] == 'USDT']
         return symbols
     except Exception as e:
-        print(f"❌ get_symbols შეცდომა: {e}")
+        print(f"get_symbols შეცდომა: {e}")
         return []
-
-def get_direction_confirmed(symbol, tf):
-    ohlcv = exchange.fetch_ohlcv(symbol, timeframe=tf, limit=52)
-    if len(ohlcv) < 52:
-        return None
-
-    df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
-    df['ema7'] = ta.trend.ema_indicator(df['close'], window=7)
-    df['ema25'] = ta.trend.ema_indicator(df['close'], window=25)
-
-    ema7_prev = df['ema7'].iloc[-3]
-    ema25_prev = df['ema25'].iloc[-3]
-    ema7_curr = df['ema7'].iloc[-2]
-    ema25_curr = df['ema25'].iloc[-2]
-
-    candle = df.iloc[-2]
-    prev_candle = df.iloc[-3]
-
-    if ema7_prev < ema25_prev and ema7_curr > ema25_curr:
-        if candle['high'] > prev_candle['high'] and candle['close'] > candle['open']:
-            return "BUY"
-
-    if ema7_prev > ema25_prev and ema7_curr < ema25_curr:
-        if candle['low'] < prev_candle['low'] and candle['close'] < candle['open']:
-            return "SELL"
-
-    return None
-
-def get_direction(symbol, tf):
-    ohlcv = exchange.fetch_ohlcv(symbol, timeframe=tf, limit=50)
-    if len(ohlcv) < 50:
-        return None
-    df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
-    df['ema7'] = ta.trend.ema_indicator(df['close'], window=7)
-    df['ema25'] = ta.trend.ema_indicator(df['close'], window=25)
-    ema7 = df['ema7']
-    ema25 = df['ema25']
-    if ema7.iloc[-2] < ema25.iloc[-2] and ema7.iloc[-1] > ema25.iloc[-1]:
-        return "BUY"
-    elif ema7.iloc[-2] > ema25.iloc[-2] and ema7.iloc[-1] < ema25.iloc[-1]:
-        return "SELL"
-    else:
-        return None
 
 def check_indicators(df):
     try:
@@ -114,16 +67,12 @@ def scan_loop(tf):
     status["running"] = True
     status["tf"] = tf
 
-    # ✅ ვაჩვენებთ სიმბოლოების რაოდენობას UI-ში იმ წამსვე
-    symbols = get_symbols()
-    status["total"] = len(symbols)
-
     while status["running"]:
         symbols = get_symbols()
         status["total"] = len(symbols)
         status["results"] = []
-        status["finished"] = False
         status["duration"] = 0
+        status["finished"] = False
 
         start = time.time()
         results = []
@@ -133,18 +82,40 @@ def scan_loop(tf):
                 break
 
             try:
-                if tf == "1h-confirmed":
-                    dir_signal = get_direction_confirmed(symbol, "1h")
-                else:
-                    dir_signal = get_direction(symbol, tf)
+                ohlcv = exchange.fetch_ohlcv(symbol, timeframe=tf, limit=52)
+                if len(ohlcv) < 52:
+                    continue
 
-                if dir_signal:
-                    ohlcv = exchange.fetch_ohlcv(symbol, timeframe=tf, limit=50)
-                    if len(ohlcv) < 50:
-                        continue
-                    df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
+                df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
+                df['ema7'] = ta.trend.ema_indicator(df['close'], window=7)
+                df['ema25'] = ta.trend.ema_indicator(df['close'], window=25)
+
+                ema7_prev = df['ema7'].iloc[-3]
+                ema25_prev = df['ema25'].iloc[-3]
+                ema7_curr = df['ema7'].iloc[-2]
+                ema25_curr = df['ema25'].iloc[-2]
+
+                candle = df.iloc[-2]
+                prev_candle = df.iloc[-3]
+
+                direction = None
+                if ema7_prev < ema25_prev and ema7_curr > ema25_curr:
+                    if candle['high'] > prev_candle['high'] and candle['close'] > candle['open']:
+                        direction = "BUY"
+
+                elif ema7_prev > ema25_prev and ema7_curr < ema25_curr:
+                    if candle['low'] < prev_candle['low'] and candle['close'] < candle['open']:
+                        direction = "SELL"
+
+                if direction:
                     indicators = check_indicators(df)
-                    results.append((len(indicators), f"{dir_signal}: {symbol} ({' + '.join(indicators)})"))
+                    results.append({
+                        "symbol": symbol,
+                        "direction": direction,
+                        "indicators": indicators,
+                        "match_count": len(indicators)
+                    })
+
             except Exception as e:
                 print(f"{symbol} შეცდომა: {e}")
 
@@ -154,15 +125,20 @@ def scan_loop(tf):
         status["finished"] = True
 
         if results:
-            sorted_results = sorted(results, key=lambda x: -x[0])
-            status["results"] = [r[1] for r in sorted_results]
-            msg = f"\U0001F4CA EMA 7/25 გადაკვეთა ({tf})\n\n" + "\n".join(status["results"])
+            sorted_results = sorted(results, key=lambda x: -x['match_count'])
+            best = sorted_results[0]
+            lines = [f"📊 საუკეთესო ქოინი: {best['symbol']} ({best['match_count']} ინდიკატორი)\n" +
+                     " + ".join(best['indicators']) + "\n"]
+
+            for r in sorted_results:
+                lines.append(f"✅ {r['direction']}: {r['symbol']} ({' + '.join(r['indicators'])})")
+
+            msg = f"📈 EMA 7/25 გადაკვეთა ({tf})\n\n" + "\n".join(lines)
         else:
-            msg = f"\u274C არ მოიძებნა გადაკვეთა\nტაიმფრეიმი: {tf}"
+            msg = f"❌ არ მოიძებნა გადაკვეთა\nტაიმფრეიმი: {tf}\nშემოწმდა: {len(symbols)} ქოინი"
 
         send_telegram(msg)
-
-        time.sleep(300)  # 5 წუთიანი პაუზა
+        time.sleep(300)
 
 @app.route("/", methods=["GET"])
 def index():
