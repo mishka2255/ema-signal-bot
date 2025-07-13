@@ -1,165 +1,231 @@
-from flask import Flask, render_template, request
+import os
+import time
+import threading
+import requests
 import ccxt
 import pandas as pd
 import ta
-import time
-import requests
-import threading
+from flask import Flask, render_template, request, jsonify
+
+# --- 1. პროფესიონალური კონფიგურაცია ---
+CONFIG = {
+    # მაღალი ტაიმფრეიმი ტრენდის დასადგენად
+    "high_tf": "4h",
+    "high_tf_ema": 50, # EMA პერიოდი ტრენდისთვის
+
+    # დაბალი ტაიმფრეიმი შესვლის სიგნალისთვის
+    "low_tf": "1h",
+    "low_tf_ema_short": 7,
+    "low_tf_ema_long": 25,
+
+    # დამატებითი ფილტრები
+    "rsi_period": 14,
+    "adx_period": 14,
+    "adx_threshold": 25, # გავზარდოთ ზღვარი ძლიერი ტრენდისთვის
+    
+    # ტექნიკური პარამეტრები
+    "ohlcv_limit": 100,
+    "scan_interval_seconds": 600 # 10 წუთი
+}
+
+# --- 2. უსაფრთხოება: API გასაღებები გარემოს ცვლადებიდან ---
+BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_FALLBACK_BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID", "YOUR_FALLBACK_CHAT_ID")
 
 app = Flask(__name__)
 
-# Telegram პარამეტრები
-BOT_TOKEN = "8158204187:AAFPEApXyE_ot0pz3J23b1h5ubJ82El5gLc"
-CHAT_ID = "7465722084"
-
-# სტატუსის ობიექტი
+# გლობალური სტატუსის ობიექტი
 status = {
     "running": False,
-    "tf": "",
-    "total": 0,
-    "duration": 0,
-    "results": [],
-    "finished": False
+    "current_strategy": "N/A",
+    "symbols_total": 0,
+    "symbols_scanned": 0,
+    "scan_duration": 0,
+    "last_scan_results": [],
+    "last_scan_time": "N/A"
 }
+
+# --- 3. სერვისები ---
+exchange = ccxt.binance({'options': {'defaultType': 'future'}})
 
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    data = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"}
+    data = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML", "disable_web_page_preview": True}
     try:
-        requests.post(url, data=data)
-    except Exception as e:
+        requests.post(url, data=data, timeout=10).raise_for_status()
+    except requests.exceptions.RequestException as e:
         print(f"Telegram შეცდომა: {e}")
 
-# Binance Futures
-exchange = ccxt.binance({'options': {'defaultType': 'future'}})
-
-def get_symbols():
+def get_all_symbols():
     try:
         markets = exchange.load_markets()
-        symbols = [s for s in markets if markets[s].get('contract') and markets[s]['quote'] == 'USDT']
-        print(f"🔍 ქოინების რაოდენობა: {len(symbols)}")
-        return symbols
-    except Exception as e:
-        print(f"❌ get_symbols შეცდომა: {e}")
+        return [s for s in markets if markets[s].get('contract') and markets[s]['quote'] == 'USDT']
+    except ccxt.BaseError as e:
+        print(f"❌ სიმბოლოების ჩატვირთვის შეცდომა: {e}")
         return []
 
-def check_indicators(df):
+# --- 4. ანალიტიკური ფუნქციები ---
+
+def get_higher_tf_trend(df):
+    """განსაზღვრავს ტრენდს მაღალ ტაიმფრეიმზე."""
     try:
-        df['ema7'] = ta.trend.ema_indicator(df['close'], window=7)
-        df['ema25'] = ta.trend.ema_indicator(df['close'], window=25)
-        df['rsi'] = ta.momentum.RSIIndicator(df['close'], window=14).rsi()
-        df['volume_avg'] = df['volume'].rolling(window=20).mean()
-        df['atr'] = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close']).average_true_range()
-        bb = ta.volatility.BollingerBands(df['close'])
-        df['bb_width'] = bb.bollinger_hband() - bb.bollinger_lband()
-        df['adx'] = ta.trend.ADXIndicator(df['high'], df['low'], df['close']).adx()
+        df['ema_trend'] = ta.trend.ema_indicator(df['close'], window=CONFIG['high_tf_ema'])
+        last_close = df['close'].iloc[-1]
+        last_ema = df['ema_trend'].iloc[-1]
+        
+        if last_close > last_ema:
+            return "BULLISH" # აღმავალი
+        elif last_close < last_ema:
+            return "BEARISH" # დაღმავალი
+        return "NEUTRAL" # ნეიტრალური
+    except Exception:
+        return "UNKNOWN"
 
-        passed = []
-        if df['volume'].iloc[-1] > df['volume_avg'].iloc[-1]: passed.append("VOL")
-        if df['rsi'].iloc[-1] < 70: passed.append("RSI")
-        if df['close'].iloc[-1] > df['open'].iloc[-1]: passed.append("CANDLE")
-        if df['ema25'].iloc[-1] > df['ema7'].iloc[-1]: passed.append("TREND")
-        if df['atr'].iloc[-1] > df['atr'].rolling(window=20).mean().iloc[-1]: passed.append("ATR")
-        if df['bb_width'].iloc[-1] > df['bb_width'].rolling(window=20).mean().iloc[-1]: passed.append("BB")
-        if df['adx'].iloc[-1] > 20: passed.append("ADX")
+def check_low_tf_signal(df):
+    """ეძებს შესვლის სიგნალს დაბალ ტაიმფრეიმზე."""
+    try:
+        # ინდიკატორების გამოთვლა
+        df['ema_short'] = ta.trend.ema_indicator(df['close'], window=CONFIG['low_tf_ema_short'])
+        df['ema_long'] = ta.trend.ema_indicator(df['close'], window=CONFIG['low_tf_ema_long'])
+        df['rsi'] = ta.momentum.RSIIndicator(df['close'], window=CONFIG['rsi_period']).rsi()
+        df['adx'] = ta.trend.ADXIndicator(df['high'], df['low'], df['close'], window=CONFIG['adx_period']).adx()
 
-        return passed
-    except:
-        return []
+        # ბოლო სანთლის მონაცემები
+        last = df.iloc[-1]
+        prev = df.iloc[-2]
 
-def is_confirmed_after_cross(df):
-    df['ema7'] = ta.trend.ema_indicator(df['close'], window=7)
-    df['ema25'] = ta.trend.ema_indicator(df['close'], window=25)
+        # გადაკვეთის ლოგიკა
+        is_buy_cross = prev['ema_short'] < prev['ema_long'] and last['ema_short'] > last['ema_long']
+        is_sell_cross = prev['ema_short'] > prev['ema_long'] and last['ema_short'] < last['ema_long']
+        
+        signal_type = None
+        if is_buy_cross:
+            signal_type = "BUY"
+        elif is_sell_cross:
+            signal_type = "SELL"
+        
+        if not signal_type:
+            return None, []
 
-    ema7_prev = df['ema7'].iloc[-3]
-    ema25_prev = df['ema25'].iloc[-3]
-    ema7_cross = df['ema7'].iloc[-2]
-    ema25_cross = df['ema25'].iloc[-2]
+        # ფილტრების შემოწმება
+        passed_filters = []
+        is_bullish_candle = last['close'] > last['open']
+        
+        if signal_type == "BUY" and is_bullish_candle:
+            passed_filters.append("CANDLE")
+        elif signal_type == "SELL" and not is_bullish_candle:
+            passed_filters.append("CANDLE")
+            
+        if last['adx'] > CONFIG['adx_threshold']:
+            passed_filters.append("ADX")
+            
+        # RSI ფილტრი: BUY-სთვის არ უნდა იყოს გადაყიდული, SELL-სთვის - გადაყიდული
+        if signal_type == "BUY" and last['rsi'] < 70:
+            passed_filters.append("RSI")
+        elif signal_type == "SELL" and last['rsi'] > 30:
+            passed_filters.append("RSI")
+            
+        return signal_type, passed_filters
 
-    # BUY გადაკვეთა — ოვერ ლოუს შემდეგ
-    if ema7_prev < ema25_prev and ema7_cross > ema25_cross:
-        red_count = sum(df.iloc[-i]['close'] < df.iloc[-i]['open'] for i in [1, 2])
-        if red_count in [1, 2]:
-            return "BUY"
+    except Exception as e:
+        # print(f"Low TF Signal Error: {e}")
+        return None, []
 
-    # SELL გადაკვეთა — ოვერ ჰაის შემდეგ
-    elif ema7_prev > ema25_prev and ema7_cross < ema25_cross:
-        green_count = sum(df.iloc[-i]['close'] > df.iloc[-i]['open'] for i in [1, 2])
-        if green_count in [1, 2]:
-            return "SELL"
 
-    return None
-
-def scan_loop(tf):
+# --- 5. მთავარი სკანირების ციკლი ---
+def scan_loop():
+    """მთავარი ციკლი, რომელიც იყენებს მრავალ-ტაიმფრეიმიან ანალიზს."""
     status["running"] = True
-    status["tf"] = tf
+    status["current_strategy"] = f"MTA: {CONFIG['high_tf']} Trend / {CONFIG['low_tf']} Entry"
+    
+    symbols = get_all_symbols()
+    status["symbols_total"] = len(symbols)
 
     while status["running"]:
-        symbols = get_symbols()
-        status["total"] = len(symbols)
-        status["results"] = []
-        status["duration"] = 0
-        status["finished"] = False
+        start_time = time.time()
+        status["last_scan_results"] = []
+        status["symbols_scanned"] = 0
+        
+        found_signals = []
 
-        start = time.time()
-        results = []
-
-        for symbol in symbols:
-            if not status["running"]:
-                break
+        for i, symbol in enumerate(symbols):
+            if not status["running"]: break
+            status["symbols_scanned"] = i + 1
+            
             try:
-                ohlcv = exchange.fetch_ohlcv(symbol, timeframe="1h", limit=52)
-                if len(ohlcv) < 52:
-                    continue
+                # 1. ვიღებთ მაღალი ტაიმფრეიმის მონაცემებს და ვადგენთ ტრენდს
+                ohlcv_high = exchange.fetch_ohlcv(symbol, timeframe=CONFIG['high_tf'], limit=CONFIG['ohlcv_limit'])
+                if len(ohlcv_high) < CONFIG['ohlcv_limit']: continue
+                df_high = pd.DataFrame(ohlcv_high, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                main_trend = get_higher_tf_trend(df_high)
 
-                df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
-                dir_signal = is_confirmed_after_cross(df)
+                if main_trend in ["BULLISH", "BEARISH"]:
+                    # 2. თუ ტრენდი გვაქვს, ვიღებთ დაბალი ტაიმფრეიმის მონაცემებს
+                    ohlcv_low = exchange.fetch_ohlcv(symbol, timeframe=CONFIG['low_tf'], limit=CONFIG['ohlcv_limit'])
+                    if len(ohlcv_low) < CONFIG['ohlcv_limit']: continue
+                    df_low = pd.DataFrame(ohlcv_low, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    
+                    signal, filters = check_low_tf_signal(df_low)
 
-                if dir_signal:
-                    indicators = check_indicators(df)
-                    results.append((len(indicators), f"{dir_signal}: {symbol} ({' + '.join(indicators)})"))
+                    # 3. ვადარებთ ტრენდს და სიგნალს
+                    if (main_trend == "BULLISH" and signal == "BUY") or \
+                       (main_trend == "BEARISH" and signal == "SELL"):
+                        
+                        # სიგნალს ვთვლით მხოლოდ თუ ყველა ძირითადი ფილტრი გავლილია
+                        if "CANDLE" in filters and "ADX" in filters and "RSI" in filters:
+                            link = f"https://www.binance.com/en/futures/{symbol.replace('USDT', '_USDT')}"
+                            result_text = (
+                                f"📈 <b>{signal}: <a href='{link}'>{symbol}</a></b>\n"
+                                f"    - <b>Trend ({CONFIG['high_tf']}):</b> {main_trend}\n"
+                                f"    - <b>Entry ({CONFIG['low_tf']}):</b> EMA Cross\n"
+                                f"    - <b>Filters:</b> {', '.join(filters)}"
+                            )
+                            found_signals.append(result_text)
+
+            except ccxt.BaseError:
+                continue # ბირჟის შეცდომისას უბრალოდ გადავდივართ შემდეგზე
             except Exception as e:
-                print(f"{symbol} შეცდომა: {e}")
-            time.sleep(0.3)
+                print(f"გაუთვალისწინებელი შეცდომა {symbol}-ზე: {e}")
+            
+            time.sleep(0.3) # API ლიმიტების დაცვა
 
-        status["duration"] = int(time.time() - start)
-        status["finished"] = True
+        status["scan_duration"] = int(time.time() - start_time)
+        status["last_scan_time"] = time.strftime("%Y-%m-%d %H:%M:%S")
 
-        if results:
-            sorted_results = sorted(results, key=lambda x: -x[0])
-            status["results"] = [r[1] for r in sorted_results]
-            msg = f"📊 EMA 7/25 გადაკვეთა 1სთ (დადასტურებული)\n\n" + "\n".join(status["results"])
+        if found_signals:
+            status["last_scan_results"] = found_signals
+            header = f"🎯 <b>სავაჭრო სიგნალები ({status['current_strategy']})</b>\n"
+            message = header + "\n\n" + "\n\n".join(found_signals)
+            send_telegram(message)
         else:
-            msg = "❌ არ მოიძებნა გადაკვეთა\nტაიმფრეიმი: 1h-confirmed"
+            print(f"{status['last_scan_time']} - შესაბამისი სიგნალები ვერ მოიძებნა.")
 
-        send_telegram(msg)
-        time.sleep(300)  # ყოველ 5 წუთში ერთხელ
+        time.sleep(CONFIG['scan_interval_seconds'])
+    
+    status["running"] = False
 
+# --- 6. Flask მარშრუტები (არ შეცვლილა, მაგრამ დავტოვოთ) ---
 @app.route("/", methods=["GET"])
 def index():
-    return render_template("index.html", status=status)
+    return render_template("index.html", status=status, config=CONFIG)
 
 @app.route("/start", methods=["POST"])
 def start():
     if not status["running"]:
-        tf = request.form.get("timeframe")
-        thread = threading.Thread(target=scan_loop, args=(tf,))
+        thread = threading.Thread(target=scan_loop)
+        thread.daemon = True
         thread.start()
-    return render_template("index.html", status=status)
+    return render_template("index.html", status=status, config=CONFIG)
 
 @app.route("/stop", methods=["POST"])
 def stop():
     status["running"] = False
-    return render_template("index.html", status=status)
+    return render_template("index.html", status=status, config=CONFIG)
 
 @app.route("/status", methods=["GET"])
 def get_status():
-    return {
-        "running": status["running"],
-        "duration": status["duration"],
-        "finished": status["finished"],
-        "total": status["total"]
-    }
+    return jsonify(status)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=3000)
+
