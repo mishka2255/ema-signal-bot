@@ -17,9 +17,9 @@ CONFIG = {
     "ohlcv_limit": 100, "api_call_delay": 0.25
 }
 
-# --- 2. უსაფრთხოება ---
-BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_FALLBACK_BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID", "YOUR_FALLBACK_CHAT_ID")
+# --- 2. Telegram-ის მონაცემები (ჩაწერილია პირდაპირ კოდში) ---
+BOT_TOKEN = "8158204187:AAFPEApXyE_ot0pz3J23b1h5ubJ82El5gLc"
+CHAT_ID = "7465722084"
 
 app = Flask(__name__)
 
@@ -35,6 +35,14 @@ status = {
 exchange = ccxt.binance({'options': {'defaultType': 'future'}})
 
 def send_telegram(message):
+    # ვამოწმებთ, რომ ტოკენი და აიდი ცარიელი არ არის
+    if not BOT_TOKEN or "YOUR_FALLBACK_BOT_TOKEN" in BOT_TOKEN:
+        print("Telegram შეცდომა: BOT_TOKEN არ არის კონფიგურირებული.")
+        return
+    if not CHAT_ID:
+        print("Telegram შეცდომა: CHAT_ID არ არის კონფიგურირებული.")
+        return
+        
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     data = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML", "disable_web_page_preview": True}
     try:
@@ -107,10 +115,9 @@ def scan_loop():
         for i, symbol in enumerate(symbols):
             if not status["running"]: break
             
-            # განახლებული სტატუსი ყოველი სიმბოლოს შემდეგ
             status["symbols_scanned"] = i + 1
             elapsed_time = time.time() - start_time
-            if elapsed_time > 1: # ვითვლით მხოლოდ თუ საკმარისი დრო გავიდა
+            if elapsed_time > 1:
                 time_per_symbol = elapsed_time / status["symbols_scanned"]
                 remaining_symbols = status["symbols_total"] - status["symbols_scanned"]
                 status["estimated_remaining_sec"] = int(time_per_symbol * remaining_symbols)
@@ -143,7 +150,6 @@ def scan_loop():
                             f"<b>Trend ({CONFIG['high_tf']}):</b> {main_trend}\n"
                             f"<b>Filters:</b> {' '.join(filters) if filters else '❌ None'}"
                         )
-                        # ვინახავთ სიგნალს და ფილტრების რაოდენობას დასახარისხებლად
                         found_signals.append({'text': result_text, 'quality': len(filters)})
 
             except ccxt.BaseError: continue
@@ -155,11 +161,9 @@ def scan_loop():
         status["last_scan_time"] = time.strftime("%Y-%m-%d %H:%M:%S")
 
         if found_signals:
-            # ვახარისხებთ სიგნალებს ხარისხის მიხედვით (კლებადობით)
             sorted_signals = sorted(found_signals, key=lambda x: x['quality'], reverse=True)
             
-            # ვამატებთ მედლებს საუკეთესო სიგნალებს
-            medals = ['🥇', '🥈', '🥉']
+            medals = ['�', '🥈', '🥉']
             final_messages = []
             for i, sig in enumerate(sorted_signals):
                 prefix = medals[i] if i < len(medals) else '🔹'
@@ -200,3 +204,4 @@ def get_status(): return jsonify(status)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=3000)
+�
