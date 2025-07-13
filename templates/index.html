@@ -2,115 +2,186 @@
 <html lang="ka">
 <head>
     <meta charset="UTF-8">
-    <title>ტაიმფრეიმ სკანერი</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MTA სკანერი</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         body {
-            font-family: "BPG Nino Mtavruli", sans-serif;
-            text-align: center;
-            padding: 40px;
+            font-family: 'Inter', "BPG Nino Mtavruli", sans-serif;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
         }
-        h1 {
-            font-size: 38px;
+        .btn {
+            @apply px-8 py-4 rounded-lg font-semibold text-white shadow-lg transition-transform transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-offset-2;
         }
-        button {
-            font-size: 26px;
-            padding: 20px 35px;
-            margin: 20px;
-            border-radius: 12px;
+        .btn-start {
+            @apply bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 focus:ring-blue-500;
         }
-        .info {
-            margin-top: 30px;
-            font-size: 24px;
+        .btn-stop {
+            @apply bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-700 hover:to-pink-700 focus:ring-red-500;
         }
-        #timer {
-            font-size: 28px;
-            font-weight: bold;
-            margin-top: 15px;
+        .card {
+            @apply bg-white dark:bg-gray-800 shadow-2xl rounded-2xl p-6 md:p-8;
         }
-        ul {
-            list-style-type: none;
-            padding: 0;
+        /* სტილი Telegram-იდან მოსული HTML-ისთვის */
+        #results-list a {
+            @apply text-blue-500 hover:underline font-bold;
         }
-        li {
-            font-size: 20px;
-            margin: 8px;
-            padding: 10px;
-            border-radius: 8px;
-        }
-        .strong { background-color: #d4f4dd; font-weight: bold; }
-        .medium { background-color: #fff8d6; }
-        .weak { background-color: #f8d6d6; }
     </style>
 </head>
-<body>
-    <h1>აირჩიე ტაიმფრეიმი:</h1>
-    <form method="POST" action="/start">
-        <button name="timeframe" value="5m">5 წუთი</button>
-        <button name="timeframe" value="15m">15 წუთი</button>
-        <button name="timeframe" value="1h-confirmed">1 საათი (დადასტურებული)</button>
-    </form>
+<body class="bg-gray-100 dark:bg-gray-900 text-gray-800 dark:text-gray-200 min-h-screen flex items-center justify-center p-4">
 
-    <form method="POST" action="/stop">
-        <button type="submit" style="font-size: 22px; padding: 15px 30px; background-color: #ff5555; color: white; border: none; border-radius: 10px;">
-            ⛔ გაჩერება
-        </button>
-    </form>
+    <div class="w-full max-w-3xl mx-auto">
+        <div class="card">
+            <header class="text-center mb-8">
+                <h1 class="text-3xl md:text-4xl font-bold text-gray-900 dark:text-white">პროფესიონალური სავაჭრო სკანერი</h1>
+                <p id="strategy-display" class="text-indigo-500 dark:text-indigo-400 mt-2 font-semibold text-lg">
+                    სტრატეგია: {{ config.high_tf }} ტრენდი / {{ config.low_tf }} შესვლა
+                </p>
+            </header>
 
-    {% if status.running %}
-        <div class="info">
-            ⏳ პროცესი დაიწყო — ვამოწმებთ {{ status.tf }} ტაიმფრეიმზე {{ status.total }} ქოინს...
-        </div>
-        <div id="timer">⏱️ დარჩენილი დრო: ითვლება...</div>
-    {% endif %}
+            <!-- Start/Stop Controls -->
+            <div id="controls" class="text-center">
+                <!-- Start Form -->
+                <form id="start-form" method="POST" action="/start">
+                    <button type="submit" class="btn btn-start text-xl">🚀 სკანირების დაწყება</button>
+                </form>
+                <!-- Stop Form -->
+                <form id="stop-form" method="POST" action="/stop" class="hidden">
+                     <button type="submit" class="btn btn-stop text-xl">⛔ სკანირების გაჩერება</button>
+                </form>
+            </div>
 
-    {% if status.finished %}
-        <div class="info" style="color: green; margin-top: 30px;">
-            ✅ სკანირება დასრულდა!
+            <!-- Status Display -->
+            <div id="status-container" class="mt-8 text-center space-y-4 hidden">
+                <div id="status-text" class="text-lg font-medium text-blue-600 dark:text-blue-400"></div>
+                <!-- Progress Bar -->
+                <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-4">
+                    <div id="progress-bar" class="bg-gradient-to-r from-blue-500 to-indigo-500 h-4 rounded-full transition-all duration-500" style="width: 0%"></div>
+                </div>
+                <div id="progress-label" class="text-sm text-gray-500 dark:text-gray-400"></div>
+            </div>
+
+            <!-- Results Display -->
+            <div id="results-container" class="mt-8 hidden">
+                <div class="text-center border-t dark:border-gray-700 pt-6">
+                    <h2 id="results-header" class="text-2xl font-bold mb-2"></h2>
+                    <p id="results-subheader" class="text-gray-500 dark:text-gray-400 mb-4"></p>
+                </div>
+                <ul id="results-list" class="space-y-4">
+                    <!-- Results will be injected here by JavaScript -->
+                </ul>
+            </div>
         </div>
-        <div class="info">
-            🕓 შესრულებული დრო: {{ status.duration // 60 }} წუთი {{ "%02d"|format(status.duration % 60) }} წამი
-        </div>
-        <div class="info">
-            <h3>📋 აღმოჩენილი სიგნალები:</h3>
-            <ul>
-                {% for item in status.results %}
-                    {% set indicators = item.count('+') %}
-                    <li class="{{ 'strong' if indicators >= 4 else 'medium' if indicators >= 2 else 'weak' }}">
-                        {{ item }} {% if indicators >= 1 %}[{{ '⭐' * indicators }}]{% endif %}
-                    </li>
-                {% endfor %}
-            </ul>
-        </div>
-    {% endif %}
+        <footer class="text-center mt-6 text-sm text-gray-500 dark:text-gray-400">
+            <p>MTA (Multi-Timeframe Analysis) სტრატეგია</p>
+        </footer>
+    </div>
 
     <script>
-        let remaining = 0;
-        const timerElem = document.getElementById("timer");
+        // DOM Elements
+        const startForm = document.getElementById('start-form');
+        const stopForm = document.getElementById('stop-form');
+        const statusContainer = document.getElementById('status-container');
+        const statusText = document.getElementById('status-text');
+        const progressBar = document.getElementById('progress-bar');
+        const progressLabel = document.getElementById('progress-label');
+        const resultsContainer = document.getElementById('results-container');
+        const resultsHeader = document.getElementById('results-header');
+        const resultsSubheader = document.getElementById('results-subheader');
+        const resultsList = document.getElementById('results-list');
+        const strategyDisplay = document.getElementById('strategy-display');
 
-        function updateTimer() {
-            fetch("/status")
-                .then(response => response.json())
-                .then(data => {
-                    if (data.running && !data.finished) {
-                        const estimatedTotal = Math.round(data.total * 0.4);
-                        const remainingSeconds = estimatedTotal - data.duration;
-                        if (remainingSeconds > 0) {
-                            let mins = Math.floor(remainingSeconds / 60);
-                            let secs = remainingSeconds % 60;
-                            timerElem.innerText = `⏱️ დარჩენილი დრო: ${mins} წუთი ${secs.toString().padStart(2, '0')} წამი`;
-                        } else {
-                            timerElem.innerText = `⏱️ დასრულების მოლოდინი...`;
-                        }
-                        setTimeout(updateTimer, 1000);
-                    } else if (data.finished) {
-                        location.reload();
-                    }
+        let statusInterval;
+        let initialStatus = {{ status | tojson }};
+        let appConfig = {{ config | tojson }};
+
+        function renderResults(statusData) {
+            resultsList.innerHTML = ''; // Clear previous results
+            if (statusData.last_scan_results && statusData.last_scan_results.length > 0) {
+                resultsHeader.innerText = '🎯 აღმოჩენილი სიგნალები';
+                resultsSubheader.innerText = `სკანირება დასრულდა ${statusData.scan_duration} წამში. ბოლო განახლება: ${statusData.last_scan_time}`;
+                
+                statusData.last_scan_results.forEach(itemHTML => {
+                    const li = document.createElement('li');
+                    li.className = 'bg-gray-50 dark:bg-gray-700/50 p-4 rounded-lg shadow-sm whitespace-pre-line leading-relaxed';
+                    li.innerHTML = itemHTML; // პირდაპირ ვაწერთ მოსულ HTML-ს
+                    resultsList.appendChild(li);
                 });
+
+            } else {
+                resultsHeader.innerText = '🧐 სიგნალები ვერ მოიძებნა';
+                resultsSubheader.innerText = `სკანირება დასრულდა. ბოლო განახლება: ${statusData.last_scan_time}`;
+            }
+            resultsContainer.classList.remove('hidden');
         }
 
-        {% if status.running and not status.finished %}
-            updateTimer();
-        {% endif %}
+        function updateUI(data) {
+            strategyDisplay.innerText = `სტრატეგია: ${appConfig.high_tf} ტრენდი / ${appConfig.low_tf} შესვლა`;
+
+            if (data.running) {
+                // --- SCAN IS RUNNING ---
+                startForm.classList.add('hidden');
+                stopForm.classList.remove('hidden');
+                statusContainer.classList.remove('hidden');
+                resultsContainer.classList.add('hidden');
+
+                statusText.innerText = `⏳ ვასკანერებ...`;
+                
+                const progress = data.symbols_total > 0 ? (data.symbols_scanned / data.symbols_total) * 100 : 0;
+                progressBar.style.width = `${progress}%`;
+                progressLabel.innerText = `${data.symbols_scanned} / ${data.symbols_total} სიმბოლო`;
+
+            } else {
+                // --- SCAN IS NOT RUNNING ---
+                clearInterval(statusInterval);
+                statusInterval = null;
+                
+                startForm.classList.remove('hidden');
+                stopForm.classList.add('hidden');
+                statusContainer.classList.add('hidden');
+
+                if (data.last_scan_time !== 'N/A') {
+                    renderResults(data);
+                }
+            }
+        }
+
+        async function fetchStatus() {
+            try {
+                const response = await fetch('/status');
+                if (!response.ok) throw new Error('Network response was not ok');
+                const data = await response.json();
+                updateUI(data);
+            } catch (error) {
+                console.error("Failed to fetch status:", error);
+                statusText.innerText = "სერვერთან კავშირი დაიკარგა.";
+                clearInterval(statusInterval);
+            }
+        }
+
+        // --- Event Listeners ---
+        startForm.addEventListener('submit', () => {
+            setTimeout(() => {
+                if (!statusInterval) {
+                    statusInterval = setInterval(fetchStatus, 2000);
+                }
+            }, 100);
+        });
+        
+        // --- Initial Load ---
+        document.addEventListener('DOMContentLoaded', () => {
+            if (initialStatus.running) {
+                statusInterval = setInterval(fetchStatus, 2000);
+            }
+            updateUI(initialStatus);
+        });
+
     </script>
 </body>
 </html>
