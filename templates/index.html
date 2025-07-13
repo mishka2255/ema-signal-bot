@@ -3,35 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MTA სკანერი</title>
-    <!-- Tailwind CSS -->
+    <title>MTA სკანერი v3</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Google Fonts: Inter -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        body {
-            font-family: 'Inter', "BPG Nino Mtavruli", sans-serif;
-            -webkit-font-smoothing: antialiased;
-            -moz-osx-font-smoothing: grayscale;
-        }
-        .btn {
-            @apply px-8 py-4 rounded-lg font-semibold text-white shadow-lg transition-transform transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-offset-2;
-        }
-        .btn-start {
-            @apply bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 focus:ring-blue-500;
-        }
-        .btn-stop {
-            @apply bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-700 hover:to-pink-700 focus:ring-red-500;
-        }
-        .card {
-            @apply bg-white dark:bg-gray-800 shadow-2xl rounded-2xl p-6 md:p-8;
-        }
-        /* სტილი Telegram-იდან მოსული HTML-ისთვის */
-        #results-list a {
-            @apply text-blue-500 hover:underline font-bold;
-        }
+        body { font-family: 'Inter', "BPG Nino Mtavruli", sans-serif; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+        .btn { @apply px-8 py-4 rounded-lg font-semibold text-white shadow-lg transition-transform transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-offset-2; }
+        .btn-start { @apply bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 focus:ring-blue-500; }
+        .btn-stop { @apply bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-700 hover:to-pink-700 focus:ring-red-500; }
+        .card { @apply bg-white dark:bg-gray-800 shadow-2xl rounded-2xl p-6 md:p-8; }
+        #results-list a { @apply text-blue-500 hover:underline font-bold; }
     </style>
 </head>
 <body class="bg-gray-100 dark:bg-gray-900 text-gray-800 dark:text-gray-200 min-h-screen flex items-center justify-center p-4">
@@ -40,83 +23,64 @@
         <div class="card">
             <header class="text-center mb-8">
                 <h1 class="text-3xl md:text-4xl font-bold text-gray-900 dark:text-white">პროფესიონალური სავაჭრო სკანერი</h1>
-                <p id="strategy-display" class="text-indigo-500 dark:text-indigo-400 mt-2 font-semibold text-lg">
-                    სტრატეგია: {{ config.high_tf }} ტრენდი / {{ config.low_tf }} შესვლა
-                </p>
+                <p id="strategy-display" class="text-indigo-500 dark:text-indigo-400 mt-2 font-semibold text-lg"></p>
             </header>
 
-            <!-- Start/Stop Controls -->
             <div id="controls" class="text-center">
-                <!-- Start Form -->
-                <form id="start-form" method="POST" action="/start">
-                    <button type="submit" class="btn btn-start text-xl">🚀 სკანირების დაწყება</button>
-                </form>
-                <!-- Stop Form -->
-                <form id="stop-form" method="POST" action="/stop" class="hidden">
-                     <button type="submit" class="btn btn-stop text-xl">⛔ სკანირების გაჩერება</button>
-                </form>
+                <form id="start-form" method="POST" action="/start"><button type="submit" class="btn btn-start text-xl">🚀 სკანირების დაწყება</button></form>
+                <form id="stop-form" method="POST" action="/stop" class="hidden"><button type="submit" class="btn btn-stop text-xl">⛔ სკანირების გაჩერება</button></form>
             </div>
 
-            <!-- Status Display -->
             <div id="status-container" class="mt-8 text-center space-y-4 hidden">
                 <div id="status-text" class="text-lg font-medium text-blue-600 dark:text-blue-400"></div>
-                <!-- Progress Bar -->
                 <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-4">
                     <div id="progress-bar" class="bg-gradient-to-r from-blue-500 to-indigo-500 h-4 rounded-full transition-all duration-500" style="width: 0%"></div>
                 </div>
-                <div id="progress-label" class="text-sm text-gray-500 dark:text-gray-400"></div>
+                <div class="flex justify-between items-center">
+                    <div id="progress-label" class="text-sm text-gray-500 dark:text-gray-400"></div>
+                    <!-- ახალი ელემენტი უკუათვლისთვის -->
+                    <div id="countdown-timer" class="text-sm font-bold text-gray-600 dark:text-gray-300"></div>
+                </div>
             </div>
 
-            <!-- Results Display -->
             <div id="results-container" class="mt-8 hidden">
                 <div class="text-center border-t dark:border-gray-700 pt-6">
                     <h2 id="results-header" class="text-2xl font-bold mb-2"></h2>
                     <p id="results-subheader" class="text-gray-500 dark:text-gray-400 mb-4"></p>
                 </div>
-                <ul id="results-list" class="space-y-4">
-                    <!-- Results will be injected here by JavaScript -->
-                </ul>
+                <ul id="results-list" class="space-y-4"></ul>
             </div>
         </div>
-        <footer class="text-center mt-6 text-sm text-gray-500 dark:text-gray-400">
-            <p>MTA (Multi-Timeframe Analysis) სტრატეგია</p>
-        </footer>
+        <footer class="text-center mt-6 text-sm text-gray-500 dark:text-gray-400">MTA სტრატეგია v3</footer>
     </div>
 
     <script>
-        // DOM Elements
-        const startForm = document.getElementById('start-form');
-        const stopForm = document.getElementById('stop-form');
-        const statusContainer = document.getElementById('status-container');
-        const statusText = document.getElementById('status-text');
-        const progressBar = document.getElementById('progress-bar');
-        const progressLabel = document.getElementById('progress-label');
-        const resultsContainer = document.getElementById('results-container');
-        const resultsHeader = document.getElementById('results-header');
-        const resultsSubheader = document.getElementById('results-subheader');
-        const resultsList = document.getElementById('results-list');
+        const startForm = document.getElementById('start-form'), stopForm = document.getElementById('stop-form');
+        const statusContainer = document.getElementById('status-container'), statusText = document.getElementById('status-text');
+        const progressBar = document.getElementById('progress-bar'), progressLabel = document.getElementById('progress-label');
+        const countdownTimer = document.getElementById('countdown-timer');
+        const resultsContainer = document.getElementById('results-container'), resultsHeader = document.getElementById('results-header');
+        const resultsSubheader = document.getElementById('results-subheader'), resultsList = document.getElementById('results-list');
         const strategyDisplay = document.getElementById('strategy-display');
 
         let statusInterval;
         let initialStatus = {{ status | tojson }};
         let appConfig = {{ config | tojson }};
 
-        function renderResults(statusData) {
-            resultsList.innerHTML = ''; // Clear previous results
-            if (statusData.last_scan_results && statusData.last_scan_results.length > 0) {
+        function renderResults(data) {
+            resultsList.innerHTML = '';
+            if (data.last_scan_results && data.last_scan_results.length > 0) {
                 resultsHeader.innerText = '🎯 აღმოჩენილი სიგნალები';
-                resultsSubheader.innerText = `სკანირება დასრულდა ${statusData.scan_duration} წამში. ბოლო განახლება: ${statusData.last_scan_time}`;
-                
-                statusData.last_scan_results.forEach(itemHTML => {
+                resultsSubheader.innerText = `სკანირება დასრულდა ${data.scan_duration} წამში. ბოლო განახლება: ${data.last_scan_time}`;
+                data.last_scan_results.forEach(itemHTML => {
                     const li = document.createElement('li');
                     li.className = 'bg-gray-50 dark:bg-gray-700/50 p-4 rounded-lg shadow-sm whitespace-pre-line leading-relaxed';
-                    li.innerHTML = itemHTML; // პირდაპირ ვაწერთ მოსულ HTML-ს
+                    li.innerHTML = itemHTML;
                     resultsList.appendChild(li);
                 });
-
             } else {
                 resultsHeader.innerText = '🧐 სიგნალები ვერ მოიძებნა';
-                resultsSubheader.innerText = `სკანირება დასრულდა. ბოლო განახლება: ${statusData.last_scan_time}`;
+                resultsSubheader.innerText = `სკანირება დასრულდა. ბოლო განახლება: ${data.last_scan_time}`;
             }
             resultsContainer.classList.remove('hidden');
         }
@@ -125,30 +89,31 @@
             strategyDisplay.innerText = `სტრატეგია: ${appConfig.high_tf} ტრენდი / ${appConfig.low_tf} შესვლა`;
 
             if (data.running) {
-                // --- SCAN IS RUNNING ---
                 startForm.classList.add('hidden');
                 stopForm.classList.remove('hidden');
                 statusContainer.classList.remove('hidden');
                 resultsContainer.classList.add('hidden');
-
                 statusText.innerText = `⏳ ვასკანერებ...`;
                 
                 const progress = data.symbols_total > 0 ? (data.symbols_scanned / data.symbols_total) * 100 : 0;
                 progressBar.style.width = `${progress}%`;
                 progressLabel.innerText = `${data.symbols_scanned} / ${data.symbols_total} სიმბოლო`;
 
+                // უკუათვლის ლოგიკა
+                if (data.estimated_remaining_sec > 0) {
+                    const mins = Math.floor(data.estimated_remaining_sec / 60);
+                    const secs = data.estimated_remaining_sec % 60;
+                    countdownTimer.innerText = `დარჩა: ${mins} წთ ${secs.toString().padStart(2, '0')} წმ`;
+                } else {
+                    countdownTimer.innerText = 'დროის გამოთვლა...';
+                }
             } else {
-                // --- SCAN IS NOT RUNNING ---
                 clearInterval(statusInterval);
                 statusInterval = null;
-                
                 startForm.classList.remove('hidden');
                 stopForm.classList.add('hidden');
                 statusContainer.classList.add('hidden');
-
-                if (data.last_scan_time !== 'N/A') {
-                    renderResults(data);
-                }
+                if (data.last_scan_time !== 'N/A') renderResults(data);
             }
         }
 
@@ -165,23 +130,16 @@
             }
         }
 
-        // --- Event Listeners ---
         startForm.addEventListener('submit', () => {
             setTimeout(() => {
-                if (!statusInterval) {
-                    statusInterval = setInterval(fetchStatus, 2000);
-                }
+                if (!statusInterval) statusInterval = setInterval(fetchStatus, 2000);
             }, 100);
         });
         
-        // --- Initial Load ---
         document.addEventListener('DOMContentLoaded', () => {
-            if (initialStatus.running) {
-                statusInterval = setInterval(fetchStatus, 2000);
-            }
+            if (initialStatus.running) statusInterval = setInterval(fetchStatus, 2000);
             updateUI(initialStatus);
         });
-
     </script>
 </body>
 </html>
