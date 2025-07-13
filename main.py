@@ -35,7 +35,6 @@ status = {
 exchange = ccxt.binance({'options': {'defaultType': 'future'}})
 
 def send_telegram(message):
-    # ვამოწმებთ, რომ ტოკენი და აიდი ცარიელი არ არის
     if not BOT_TOKEN or "YOUR_FALLBACK_BOT_TOKEN" in BOT_TOKEN:
         print("Telegram შეცდომა: BOT_TOKEN არ არის კონფიგურირებული.")
         return
@@ -163,7 +162,7 @@ def scan_loop():
         if found_signals:
             sorted_signals = sorted(found_signals, key=lambda x: x['quality'], reverse=True)
             
-            medals = ['�', '🥈', '🥉']
+            medals = ['🥇', '🥈', '🥉'] # <-- გასწორებულია
             final_messages = []
             for i, sig in enumerate(sorted_signals):
                 prefix = medals[i] if i < len(medals) else '🔹'
@@ -204,4 +203,3 @@ def get_status(): return jsonify(status)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=3000)
-�
