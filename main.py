@@ -10,21 +10,21 @@ from flask import Flask, render_template, request, jsonify
 # --- 1. პროფესიონალური კონფიგურაცია ---
 CONFIG = {
     # "Gatekeeper" - ჯანსაღი ბაზრის ფილტრები
-    "min_daily_volume_usdt": 20_000_000, # მინიმალური 24სთ მოცულობა (20 მილიონი)
-    "min_history_days": 120,             # მინიმალური სავაჭრო ისტორია დღეებში
+    "min_daily_volume_usdt": 20_000_000,
+    "min_history_days": 120,
 
     # "Three Pillars" - სტრატეგიის პარამეტრები
-    "structure_tf": "1d",     # ბაზრის სტრუქტურის ტაიმფრეიმი
-    "zone_tf": "4h",          # მოთხოვნა-მიწოდების ზონის ტაიმფრეიმი
-    "entry_tf": "1h",         # შესვლის დადასტურების ტაიმფრეიმი
-    "swing_points_lookback": 5, # რამდენი სანთელი განვსაზღვროთ სვინგის წერტილისთვის
+    "structure_tf": "1d",
+    "zone_tf": "4h",
+    "entry_tf": "1h",
+    "swing_points_lookback": 5,
     
     # პროფესიონალური რისკ-მენეჯმენტი
-    "risk_reward_ratio": 2.5,   # რისკი/მოგების თანაფარდობა (მაგ: 2.5:1)
-    "sl_buffer_percent": 0.05,  # 0.05% ბუფერი სტოპ ლოსისთვის (სპრედის და ფიტილისგან დასაცავად)
+    "risk_reward_ratio": 2.5,
+    "sl_buffer_percent": 0.05,
 
     # ტექნიკური პარამეტრები
-    "ohlcv_limit": 200,       # რამდენი სანთელი ჩამოვტვირთოთ ანალიზისთვის
+    "ohlcv_limit": 200,
     "api_call_delay": 0.3
 }
 
@@ -33,7 +33,6 @@ BOT_TOKEN = "8158204187:AAFPEApXyE_ot0pz3J23b1h5ubJ82El5gLc"
 CHAT_ID = "7465722084"
 
 app = Flask(__name__)
-# ვიყენებთ binanceusdm-ს, რომელიც ფიუჩერსებისთვის უფრო სტაბილურია
 exchange = ccxt.binanceusdm({'options': {'defaultType': 'future'}})
 
 # --- 3. გლობალური სტატუსი ---
@@ -60,12 +59,10 @@ def get_healthy_symbols_whitelist():
         exchange.load_markets()
         tickers = exchange.fetch_tickers()
         for symbol in tickers:
-            if symbol.endswith(':USDT'): # ვფილტრავთ ფიუჩერსულ წყვილებს
+            if symbol.endswith(':USDT'):
                 ticker_data = tickers[symbol]
-                # ფილტრი #1: 24სთ მოცულობა
                 volume_ok = ticker_data.get('quoteVolume', 0) > CONFIG["min_daily_volume_usdt"]
                 if volume_ok:
-                    # ფილტრი #2: ისტორია
                     history_ok = False
                     try:
                         ohlcv = exchange.fetch_ohlcv(symbol, '1d', limit=CONFIG["min_history_days"])
@@ -84,9 +81,7 @@ def get_healthy_symbols_whitelist():
     return whitelist
 
 # --- 6. "The Three Pillars" - სტრატეგიის ანალიტიკა ---
-
 def find_swing_points(df, lookback):
-    # იყენებს კვანტების მეთოდს სვინგების საპოვნელად
     highs = df['high'].rolling(window=2*lookback+1, center=True).apply(lambda x: x.argmax() == lookback, raw=True)
     lows = df['low'].rolling(window=2*lookback+1, center=True).apply(lambda x: x.argmin() == lookback, raw=True)
     df['swing_high'] = np.where(highs, df['high'], np.nan)
@@ -97,38 +92,31 @@ def get_market_structure(df):
     swings = find_swing_points(df, CONFIG['swing_points_lookback'])
     swing_highs = swings['swing_high'].dropna().iloc[-2:]
     swing_lows = swings['swing_low'].dropna().iloc[-2:]
-
     if len(swing_highs) < 2 or len(swing_lows) < 2: return "INDECISIVE"
-    
-    # ამოწმებს HH/HL ან LL/LH ფორმაციას
     if swing_highs.iloc[-1] > swing_highs.iloc[-2] and swing_lows.iloc[-1] > swing_lows.iloc[-2]: return "BULLISH"
     if swing_highs.iloc[-1] < swing_highs.iloc[-2] and swing_lows.iloc[-1] < swing_lows.iloc[-2]: return "BEARISH"
     return "INDECISIVE"
 
 def find_order_block(df, trend):
-    # ეძებს ბოლო სანთელს, რომელიც ქმნის იმბალანსს
     for i in range(len(df) - 2, 0, -1):
         is_bullish_ob_candidate = df['close'][i-1] < df['open'][i-1] and df['close'][i+1] > df['high'][i-1]
         is_bearish_ob_candidate = df['close'][i-1] > df['open'][i-1] and df['close'][i+1] < df['low'][i-1]
-
         if trend == "BULLISH" and is_bullish_ob_candidate:
-            return {'low': df['low'][i-1], 'high': df['high'][i-1], 'type': 'Bullish'}
+            return {'low': df['low'][i-1], 'high': df['high'][i-1]}
         if trend == "BEARISH" and is_bearish_ob_candidate:
-            return {'low': df['low'][i-1], 'high': df['high'][i-1], 'type': 'Bearish'}
+            return {'low': df['low'][i-1], 'high': df['high'][i-1]}
     return None
 
 def check_entry_confirmation(df, trend, zone):
     price = df['close'].iloc[-1]
-    # ამოწმებს, არის თუ არა ფასი ზონაში შესული რეაქციისთვის
     if not (zone['low'] <= price <= zone['high']): return False
-
-    swings = find_swing_points(df, 3) # უფრო მცირე ლუქბექი 1სთ-ზე
+    swings = find_swing_points(df, 3)
     if trend == "BULLISH":
-        last_local_high = swings['swing_high'].dropna().iloc[-1]
-        if price > last_local_high: return True # CHoCH
+        last_local_highs = swings['swing_high'].dropna()
+        if not last_local_highs.empty and price > last_local_highs.iloc[-1]: return True
     elif trend == "BEARISH":
-        last_local_low = swings['swing_low'].dropna().iloc[-1]
-        if price < last_local_low: return True # CHoCH
+        last_local_lows = swings['swing_low'].dropna()
+        if not last_local_lows.empty and price < last_local_lows.iloc[-1]: return True
     return False
 
 # --- 7. მთავარი სკანირების ციკლი ---
@@ -161,28 +149,19 @@ def scan_loop():
                         confirmed = check_entry_confirmation(df_1h, market_structure, order_block)
 
                         if confirmed:
-                            # --- პროფესიონალური რისკ-მენეჯმენტის ლოგიკა ---
                             entry_price = df_1h['close'].iloc[-1]
-                            
                             if market_structure == "BULLISH":
-                                # Stop Loss: Order Block-ის მინიმუმის ქვემოთ, ბუფერით
                                 stop_loss = order_block['low'] * (1 - CONFIG["sl_buffer_percent"] / 100)
-                                # Take Profit: გამოთვლილი RR-ით
                                 take_profit = entry_price + (entry_price - stop_loss) * CONFIG["risk_reward_ratio"]
-                            else: # BEARISH
-                                # Stop Loss: Order Block-ის მაქსიმუმის ზემოთ, ბუფერით
+                            else:
                                 stop_loss = order_block['high'] * (1 + CONFIG["sl_buffer_percent"] / 100)
-                                # Take Profit: გამოთვლილი RR-ით
                                 take_profit = entry_price - (stop_loss - entry_price) * CONFIG["risk_reward_ratio"]
 
-                            # უსაფრთხოების შემოწმება, რომ სტოპი ლოგიკურია
                             if (market_structure == "BULLISH" and entry_price > stop_loss) or \
                                (market_structure == "BEARISH" and entry_price < stop_loss):
-                                
                                 link = f"https://www.tradingview.com/chart/?symbol=BINANCE:{symbol.replace('/', '').replace(':USDT', '')}.P"
                                 prec = entry_price
                                 price_precision = max(2, str(prec)[::-1].find('.')) if '.' in str(prec) else 2
-
                                 signal_text = (
                                     f"💎 <b><a href='{link}'>{symbol}</a> | {market_structure}</b>\n\n"
                                     f"<b>Strategy:</b> Market Structure Shift\n"
@@ -200,11 +179,22 @@ def scan_loop():
             time.sleep(CONFIG["api_call_delay"])
 
         status["last_scan_time"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        
+        # --- *** ახალი ლოგიკა *** ---
         if found_signals:
             header = f"🎯 <b>ელიტური სავაჭრო სიგნალები ({status['last_scan_time']})</b>\n"
             message = header + "\n" + "\n\n".join(found_signals)
             send_telegram(message)
-
+        else:
+            # თუ სიგნალი არ მოიძებნა, ვაგზავნით სტატუს-რეპორტს
+            status_message = (
+                f"✅ <b>სტატუს-რეპორტი ({status['last_scan_time']})</b>\n\n"
+                f"სკანირების ციკლი დასრულდა. ელიტური სიგნალები ვერ მოიძებნა.\n"
+                f"თეთრ სიაშია <b>{status['whitelist_count']}</b> სანდო სიმბოლო.\n\n"
+                f"<i>ვიწყებ ახალ ციკლს...</i>"
+            )
+            send_telegram(status_message)
+        
         print(f"სკანირების ციკლი დასრულდა {int(time.time() - start_time)} წამში. ვიწყებ ახალს...")
 
     status["running"] = False
