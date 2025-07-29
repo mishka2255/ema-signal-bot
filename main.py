@@ -9,38 +9,25 @@ import ta
 from flask import Flask, render_template, jsonify
 from datetime import datetime, timedelta
 
-# --- 1. კონფიგურაცია: TradeChartist BB სტრატეგია ---
-# მომხმარებლის მოთხოვნით, ტოკენი და ID ჩაწერილია პირდაპირ.
-BOT_TOKEN = "8158204187:AAFPEApXyE_ot0pz3J23b1h5ubJ82El5gLc"
-CHAT_ID = "7465722084"
-
+# --- 1. კონფიგურაცია ---
 CONFIG = {
-    # სტრატეგიის პარამეტრები (Pine Script-ის მიხედვით)
     "scan_timeframe": "1h",
     "bb_length": 55,
     "bb_std_dev": 1.0,
-
-    # რისკ-მენეჯმენტი
     "risk_reward_ratio": 2.0,
-    "min_volume_usdt": 10_000_000,
-
-    # ტექნიკური პარამეტრები
-    "ohlcv_limit": 150, # ვზრდით, რომ barssince ლოგიკამ ზუსტად იმუშაოს
-    "api_call_delay": 0.2,
-    "signal_cooldown_hours": 4
+    "ohlcv_limit": 150, # საჭიროა ახალი ლოგიკისთვის
+    "api_call_delay": 0.25
 }
 
-# --- 2. Flask და CCXT ინიციალიზაცია (გასწორებული) ---
-app = Flask(__name__)
-# **გასწორება:** ვქმნით exchange ობიექტს, მაგრამ ჯერ არ ვტვირთავთ მარკეტებს.
-try:
-    exchange = ccxt.binanceusdm({'options': {'defaultType': 'future'}})
-    print("CCXT exchange ობიექტი წარმატებით შეიქმნა.")
-except Exception as e:
-    print(f"CCXT ობიექტის შექმნის შეცდომა: {e}")
-    exchange = None
+# --- 2. Telegram-ის და Flask-ის მონაცემები ---
+BOT_TOKEN = "8158204187:AAFPEApXyE_ot0pz3J23b1h5ubJ82El5gLc"
+CHAT_ID = "7465722084"
 
-# --- 3. გლობალური სტატუსი და მონაცემები ---
+app = Flask(__name__)
+# ვქმნით exchange ობიექტს, მაგრამ მარკეტების ჩატვირთვა მოხდება მოგვიანებით.
+exchange = ccxt.binanceusdm({'options': {'defaultType': 'future'}})
+
+# --- 3. გლობალური სტატუსი ---
 status = {
     "running": False,
     "current_phase": "Idle",
@@ -48,42 +35,27 @@ status = {
     "symbols_scanned": 0,
     "last_scan_time": "N/A",
     "next_scan_time": "N/A",
-    "last_error": None,
-    "markets_loaded": False
+    "last_error": None
 }
-sent_signals = {}
 
-
-# --- 4. სერვისის ფუნქციები ---
+# --- 4. სერვისები ---
 def send_telegram(message):
-    if not BOT_TOKEN or not CHAT_ID:
-        print("Telegram BOT_TOKEN ან CHAT_ID არ არის მითითებული.")
-        return
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     data = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML", "disable_web_page_preview": True}
     try:
-        response = requests.post(url, data=data, timeout=10)
-        response.raise_for_status()
+        requests.post(url, data=data, timeout=10).raise_for_status()
     except requests.exceptions.RequestException as e:
-        error_message = f"Telegram შეცდომა: {e}"
-        print(error_message)
-        status["last_error"] = error_message
+        print(f"Telegram შეცდომა: {e}")
 
-def get_filtered_symbols():
-    status["current_phase"] = "Fetching and filtering symbols..."
+def get_all_future_symbols():
+    status["current_phase"] = "Fetching all symbols..."
     try:
-        tickers = exchange.fetch_tickers()
-        filtered_symbols = [
-            symbol for symbol, market in exchange.markets.items()
-            if market.get('contract') and market.get('quote') == 'USDT' and market.get('settle') == 'USDT'
-            and tickers.get(symbol) and tickers[symbol].get('quoteVolume', 0) > CONFIG["min_volume_usdt"]
-        ]
-        print(f"მოიძებნა {len(filtered_symbols)} წყვილი, რომელიც აკმაყოფილებს მოცულობის ფილტრს.")
-        return filtered_symbols
+        # მარკეტების ჩატვირთვა ხდება აქ, უშუალოდ სკანირების დაწყებამდე.
+        markets = exchange.load_markets()
+        return [s for s in markets if markets[s].get('contract') and markets[s]['quote'] == 'USDT' and markets[s]['settle'] == 'USDT']
     except Exception as e:
-        error_message = f"სიმბოლოების ჩატვირთვის შეცდომა: {e}"
-        print(error_message)
-        status["last_error"] = error_message
+        print(f"სიმბოლოების ჩატვირთვის შეცდომა: {e}")
+        status["last_error"] = str(e)
         return []
 
 def get_seconds_until_next_candle():
@@ -93,31 +65,20 @@ def get_seconds_until_next_candle():
     status["next_scan_time"] = next_hour.strftime("%Y-%m-%d %H:%M:%S UTC")
     return wait_seconds
 
-# --- 5. ახალი სტრეგიის ფუნქცია (TradeChartist ლოგიკით) ---
+# --- 5. ახალი სტრეგიის ფუნქცია (TradeChartist ლოგიკა) ---
 def check_tradechartist_bb_signal(df):
-    """
-    ამოწმებს სიგნალს TradeChartist-ის BB Filter-ის ლოგიკის მიხედვით.
-    სიგნალი გენერირდება მხოლოდ მაშინ, როდესაც იცვლება ბოლო გარღვევის მიმართულება.
-    """
     if len(df) < CONFIG["bb_length"]: return None
-
     try:
-        bb = ta.volatility.BollingerBands(
-            close=df['close'], window=CONFIG["bb_length"], window_dev=CONFIG["bb_std_dev"]
-        )
-        df['bb_upper'] = bb.bollinger_hband()
-        df['bb_lower'] = bb.bollinger_lband()
-        df['bb_middle'] = bb.bollinger_mavg()
+        bb = ta.volatility.BollingerBands(close=df['close'], window=CONFIG["bb_length"], window_dev=CONFIG["bb_std_dev"])
+        df['bb_upper'], df['bb_lower'], df['bb_middle'] = bb.bollinger_hband(), bb.bollinger_lband(), bb.bollinger_mavg()
         df = df.dropna()
+        if df.empty: return None
 
         df['long_condition'] = df['close'] > df['bb_upper']
         df['short_condition'] = df['close'] < df['bb_lower']
+        long_indices, short_indices = df.index[df['long_condition']].to_numpy(), df.index[df['short_condition']].to_numpy()
 
-        long_indices = df.index[df['long_condition']].to_numpy()
-        short_indices = df.index[df['short_condition']].to_numpy()
-
-        if len(long_indices) == 0 and len(short_indices) == 0:
-            return None
+        if len(long_indices) == 0 and len(short_indices) == 0: return None
             
         def find_last_event(current_index, events):
             pos = np.searchsorted(events, current_index)
@@ -125,121 +86,89 @@ def check_tradechartist_bb_signal(df):
 
         df['last_long_event'] = [find_last_event(i, long_indices) for i in df.index]
         df['last_short_event'] = [find_last_event(i, short_indices) for i in df.index]
-        
         df['long_is_latest'] = df['last_long_event'] > df['last_short_event']
         df['state_changed'] = df['long_is_latest'].diff()
-
-        last_row = df.iloc[-1]
         
-        signal_type = None
-        if last_row['state_changed'] == True:
-            signal_type = "BUY"
-        elif last_row['state_changed'] == False:
-            signal_type = "SELL"
+        last_row = df.iloc[-1]
+        signal_type = "BUY" if last_row['state_changed'] == True else "SELL" if last_row['state_changed'] == False else None
         
         if signal_type:
-            entry_price = last_row['close']
-            stop_loss = last_row['bb_middle']
+            entry_price, stop_loss = last_row['close'], last_row['bb_middle']
             risk = abs(entry_price - stop_loss)
             if risk == 0: return None
-
             take_profit = entry_price + risk * CONFIG["risk_reward_ratio"] if signal_type == "BUY" else entry_price - risk * CONFIG["risk_reward_ratio"]
-            
             return {"signal": signal_type, "entry": entry_price, "sl": stop_loss, "tp": take_profit}
-            
         return None
     except Exception as e:
-        status["last_error"] = f"Indicator calculation error: {e}"
+        status["last_error"] = f"Indicator error: {e}"
         return None
 
-# --- 6. მთავარი სკანირების ციკლი (გაძლიერებული) ---
+# --- 6. მთავარი სკანირების ციკლი ---
 def scan_loop():
-    if not exchange:
-        print("ბირჟა არ არის ინიციალიზებული. სკანირება ჩერდება.")
+    status["running"] = True
+    all_symbols = get_all_future_symbols()
+    
+    if not all_symbols:
         status["running"] = False
+        status["current_phase"] = "Failed to fetch symbols. Stopping."
+        print(status["current_phase"])
         return
 
-    status["running"] = True
-    print("სკანირების ციკლი დაიწყო.")
-
-    # **გასწორება:** მარკეტების ჩატვირთვა ხდება აქ, "Start" ღილაკზე დაჭერის შემდეგ.
-    if not status["markets_loaded"]:
-        try:
-            status["current_phase"] = "Loading markets..."
-            print("იწყება მარკეტების ჩატვირთვა...")
-            exchange.load_markets()
-            status["markets_loaded"] = True
-            print("მარკეტები წარმატებით ჩაიტვირთა.")
-        except Exception as e:
-            error_msg = f"მარკეტების ჩატვირთვის კრიტიკული შეცდომა: {e}"
-            print(error_msg)
-            status["last_error"] = error_msg
-            status["running"] = False
-            return
-    
-    all_symbols = get_filtered_symbols()
     status["symbols_total"] = len(all_symbols)
 
     while status["running"]:
-        try:
-            current_time = datetime.utcnow()
-            status["current_phase"] = f"Scanning {CONFIG['scan_timeframe']} with TradeChartist Logic..."
-            status["last_scan_time"] = current_time.strftime("%Y-%m-%d %H:%M:%S UTC")
-            found_signals = []
+        status["current_phase"] = f"Scanning {CONFIG['scan_timeframe']} with TradeChartist Logic..."
+        found_signals = []
+        status["last_scan_time"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
-            for i, symbol in enumerate(all_symbols):
-                if not status["running"]: break
-                status["symbols_scanned"] = i + 1
-                if symbol in sent_signals and sent_signals[symbol] > current_time - timedelta(hours=CONFIG["signal_cooldown_hours"]):
-                    continue
-
-                try:
-                    ohlcv = exchange.fetch_ohlcv(symbol, CONFIG["scan_timeframe"], limit=CONFIG["ohlcv_limit"])
-                    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                    
-                    result = check_tradechartist_bb_signal(df)
-                    
-                    if result:
-                        price_precision = exchange.markets[symbol]['precision']['price']
-                        link = f"https://www.tradingview.com/chart/?symbol=BINANCE:{symbol.replace('/', '').replace(':USDT', '')}.P"
-                        signal_text = (
-                            f"🔥 <b>TradeChartist BB Signal: <a href='{link}'>{symbol}</a> | {result['signal']}</b>\n\n"
-                            f"<b>Entry:</b> <code>{result['entry']:.{price_precision}f}</code>\n"
-                            f"<b>Stop Loss:</b> <code>{result['sl']:.{price_precision}f}</code>\n"
-                            f"<b>Take Profit:</b> <code>{result['tp']:.{price_precision}f}</code>"
-                        )
-                        found_signals.append(signal_text)
-                        sent_signals[symbol] = current_time
-                        print(f"🔥 სიგნალი: {symbol} ({result['signal']})")
-                except Exception as e:
-                    print(f"შეცდომა წყვილზე {symbol}: {e}")
-                    status["last_error"] = f"Error on {symbol}: {e}"
-                    continue
+        for i, symbol in enumerate(all_symbols):
+            if not status["running"]: break
+            status["symbols_scanned"] = i + 1
+            try:
+                ohlcv = exchange.fetch_ohlcv(symbol, CONFIG["scan_timeframe"], limit=CONFIG["ohlcv_limit"])
+                if len(ohlcv) < CONFIG["ohlcv_limit"]: continue
+                df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                result = check_tradechartist_bb_signal(df)
                 
-                time.sleep(CONFIG["api_call_delay"])
+                if result:
+                    prec = result['entry']
+                    price_precision = max(2, str(prec)[::-1].find('.')) if '.' in str(prec) else 2
+                    link = f"https://www.tradingview.com/chart/?symbol=BINANCE:{symbol.replace('/', '').replace(':USDT', '')}.P"
+                    signal_text = (
+                        f"🔥 <b>TradeChartist BB Signal: <a href='{link}'>{symbol}</a> | {result['signal']}</b>\n\n"
+                        f"<b>Entry:</b> <code>{result['entry']:.{price_precision}f}</code>\n"
+                        f"<b>Stop Loss:</b> <code>{result['sl']:.{price_precision}f}</code>\n"
+                        f"<b>Take Profit:</b> <code>{result['tp']:.{price_precision}f}</code>"
+                    )
+                    found_signals.append(signal_text)
+                    print(f"🔥 სიგნალი: {symbol} ({result['signal']})")
+            except Exception as e:
+                print(f"Error processing symbol {symbol}: {e}")
+                continue
+            time.sleep(CONFIG["api_call_delay"])
 
-            if found_signals:
-                header = f"📢 <b>სავაჭრო სიგნალები ({status['last_scan_time']})</b>\n"
-                message = header + "\n---\n".join(found_signals)
-                send_telegram(message)
-            else:
-                print(f"სკანირება დასრულდა, ახალი სიგნალები არ არის. შემდეგი სკანირება: {status['next_scan_time']}")
-            
+        if found_signals:
+            header = f"📢 <b>სავაჭრო სიგნალები ({status['last_scan_time']})</b>\n"
+            message = header + "\n---\n".join(found_signals)
+            send_telegram(message)
+        else:
+            print(f"სკანირება დასრულდა, ახალი სიგნალები არ არის. ({status['last_scan_time']})")
+        
+        if status["running"]:
+            wait_time = get_seconds_until_next_candle()
+            print(f"ველოდები {wait_time:.0f} წამს შემდეგ სკანირებამდე...")
+            # ეს ციკლი საშუალებას აძლევს Stop ღილაკს, რომ უფრო სწრაფად გააჩეროს პროცესი.
+            for _ in range(int(wait_time / 10)):
+                if not status["running"]: break
+                time.sleep(10)
             if status["running"]:
-                wait_time = get_seconds_until_next_candle()
-                print(f"ველოდები {wait_time:.0f} წამს შემდეგ სკანირებამდე...")
-                time.sleep(max(10, wait_time))
+                time.sleep(wait_time % 10)
 
-        except Exception as e:
-            print(f"მოულოდნელი შეცდომა მთავარ ციკლში: {e}. ველოდები 60 წამს და ვაგრძელებ.")
-            status["last_error"] = f"Main loop error: {e}"
-            time.sleep(60)
-
-    status["current_phase"] = "Idle"
     status["running"] = False
-    print("სკანირების ციკლი დასრულდა მომხმარებლის მიერ.")
+    status["current_phase"] = "Idle"
+    print("სკანირების ციკლი შეჩერებულია.")
 
-# --- 7. Flask ვებ-ინტერფეისი ---
+# --- 7. Flask მარშრუტები ---
 @app.route("/")
 def index():
     return render_template("index.html", status=status, config=CONFIG)
@@ -257,7 +186,7 @@ def stop():
     return "OK"
 
 @app.route("/status")
-def get_status_json():
+def get_status():
     return jsonify(status)
 
 if __name__ == "__main__":
