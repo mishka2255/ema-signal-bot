@@ -30,14 +30,14 @@ CONFIG = {
     "signal_cooldown_hours": 4
 }
 
-# --- 2. Flask და CCXT ინიციალიზაცია ---
+# --- 2. Flask და CCXT ინიციალიზაცია (გასწორებული) ---
 app = Flask(__name__)
+# **გასწორება:** ვქმნით exchange ობიექტს, მაგრამ ჯერ არ ვტვირთავთ მარკეტებს.
 try:
     exchange = ccxt.binanceusdm({'options': {'defaultType': 'future'}})
-    exchange.load_markets()
-    print("BinanceUSDM ბირჟა და მარკეტები წარმატებით ჩაიტვირთა.")
+    print("CCXT exchange ობიექტი წარმატებით შეიქმნა.")
 except Exception as e:
-    print(f"ბირჟის ინიციალიზაციის შეცდომა: {e}")
+    print(f"CCXT ობიექტის შექმნის შეცდომა: {e}")
     exchange = None
 
 # --- 3. გლობალური სტატუსი და მონაცემები ---
@@ -48,7 +48,8 @@ status = {
     "symbols_scanned": 0,
     "last_scan_time": "N/A",
     "next_scan_time": "N/A",
-    "last_error": None
+    "last_error": None,
+    "markets_loaded": False
 }
 sent_signals = {}
 
@@ -101,22 +102,17 @@ def check_tradechartist_bb_signal(df):
     if len(df) < CONFIG["bb_length"]: return None
 
     try:
-        # 1. ბოლინჯერის ხაზების გამოთვლა
         bb = ta.volatility.BollingerBands(
-            close=df['close'],
-            window=CONFIG["bb_length"],
-            window_dev=CONFIG["bb_std_dev"]
+            close=df['close'], window=CONFIG["bb_length"], window_dev=CONFIG["bb_std_dev"]
         )
         df['bb_upper'] = bb.bollinger_hband()
         df['bb_lower'] = bb.bollinger_lband()
         df['bb_middle'] = bb.bollinger_mavg()
         df = df.dropna()
 
-        # 2. Pine Script-ის `long` და `short` პირობების რეპლიკაცია
         df['long_condition'] = df['close'] > df['bb_upper']
         df['short_condition'] = df['close'] < df['bb_lower']
 
-        # 3. `barssince` ლოგიკის რეპლიკაცია
         long_indices = df.index[df['long_condition']].to_numpy()
         short_indices = df.index[df['short_condition']].to_numpy()
 
@@ -130,10 +126,7 @@ def check_tradechartist_bb_signal(df):
         df['last_long_event'] = [find_last_event(i, long_indices) for i in df.index]
         df['last_short_event'] = [find_last_event(i, short_indices) for i in df.index]
         
-        # 4. Pine Script-ის `L1 < S1` პირობის რეპლიკაცია
         df['long_is_latest'] = df['last_long_event'] > df['last_short_event']
-        
-        # 5. სიგნალის გენერაცია, როდესაც მდგომარეობა იცვლება
         df['state_changed'] = df['long_is_latest'].diff()
 
         last_row = df.iloc[-1]
@@ -152,10 +145,7 @@ def check_tradechartist_bb_signal(df):
 
             take_profit = entry_price + risk * CONFIG["risk_reward_ratio"] if signal_type == "BUY" else entry_price - risk * CONFIG["risk_reward_ratio"]
             
-            return {
-                "signal": signal_type, "entry": entry_price,
-                "sl": stop_loss, "tp": take_profit
-            }
+            return {"signal": signal_type, "entry": entry_price, "sl": stop_loss, "tp": take_profit}
             
         return None
     except Exception as e:
@@ -171,6 +161,22 @@ def scan_loop():
 
     status["running"] = True
     print("სკანირების ციკლი დაიწყო.")
+
+    # **გასწორება:** მარკეტების ჩატვირთვა ხდება აქ, "Start" ღილაკზე დაჭერის შემდეგ.
+    if not status["markets_loaded"]:
+        try:
+            status["current_phase"] = "Loading markets..."
+            print("იწყება მარკეტების ჩატვირთვა...")
+            exchange.load_markets()
+            status["markets_loaded"] = True
+            print("მარკეტები წარმატებით ჩაიტვირთა.")
+        except Exception as e:
+            error_msg = f"მარკეტების ჩატვირთვის კრიტიკული შეცდომა: {e}"
+            print(error_msg)
+            status["last_error"] = error_msg
+            status["running"] = False
+            return
+    
     all_symbols = get_filtered_symbols()
     status["symbols_total"] = len(all_symbols)
 
@@ -219,22 +225,19 @@ def scan_loop():
             else:
                 print(f"სკანირება დასრულდა, ახალი სიგნალები არ არის. შემდეგი სკანირება: {status['next_scan_time']}")
             
-            # ველოდებით შემდეგ სანთელს, თუ სკრიპტი ისევ გაშვებულია
             if status["running"]:
                 wait_time = get_seconds_until_next_candle()
                 print(f"ველოდები {wait_time:.0f} წამს შემდეგ სკანირებამდე...")
                 time.sleep(max(10, wait_time))
 
         except Exception as e:
-            # ეს ბლოკი დაიჭერს ნებისმიერ გაუთვალისწინებელ შეცდომას მთავარ ციკლში
             print(f"მოულოდნელი შეცდომა მთავარ ციკლში: {e}. ველოდები 60 წამს და ვაგრძელებ.")
             status["last_error"] = f"Main loop error: {e}"
             time.sleep(60)
 
-    # ეს ნაწილი შესრულდება მხოლოდ მაშინ, როცა /stop ბრძანებით გაჩერდება ციკლი
     status["current_phase"] = "Idle"
+    status["running"] = False
     print("სკანირების ციკლი დასრულდა მომხმარებლის მიერ.")
-
 
 # --- 7. Flask ვებ-ინტერფეისი ---
 @app.route("/")
