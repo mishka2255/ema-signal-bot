@@ -16,7 +16,7 @@ CONFIG = {
     "bb_length": 55,
     "bb_std_dev": 1.0,
     "risk_reward_ratio": 2.0,
-    "ohlcv_limit": 150,
+    "ohlcv_limit": 150, # საჭიროა ახალი ლოგიკისთვის
     "api_call_delay": 0.2
 }
 
@@ -34,13 +34,12 @@ status = {
     "symbols_scanned": 0,
     "scan_duration": "N/A",
     "last_scan_time": "N/A",
-    "next_scan_time": "N/A", # დამატებულია ახალი ველები
     "last_scan_results": [],
     "estimated_remaining_sec": 0
 }
 
 # --- 4. სერვისები ---
-# ვიყენებთ შენს მუშა exchange ინსტანციას
+# ვიყენებთ შენს მუშა exchange ინსტანციას და გაშვების მეთოდს
 exchange = ccxt.binance({'options': {'defaultType': 'future'}})
 
 def send_telegram(message):
@@ -59,12 +58,6 @@ def get_all_symbols():
     except ccxt.BaseError as e:
         print(f"❌ სიმბოლოების ჩატვირთვის შეცდომა: {e}")
         return []
-
-def get_seconds_until_next_candle():
-    now = datetime.utcnow()
-    next_hour = (now + timedelta(hours=1)).replace(minute=1, second=0, microsecond=0)
-    status["next_scan_time"] = next_hour.strftime("%H:%M:%S UTC")
-    return (next_hour - now).total_seconds()
 
 # --- 5. ახალი სტრეგიის ფუნქცია (TradeChartist ლოგიკა) ---
 def check_tradechartist_bb_signal(df):
@@ -100,8 +93,7 @@ def check_tradechartist_bb_signal(df):
             take_profit = entry_price + risk * CONFIG["risk_reward_ratio"] if signal_type == "BUY" else entry_price - risk * CONFIG["risk_reward_ratio"]
             return {"signal": signal_type, "entry": entry_price, "sl": stop_loss, "tp": take_profit}
         return None
-    except Exception as e:
-        print(f"Indicator error on dataframe: {e}")
+    except Exception:
         return None
 
 # --- 6. ახალი მთავარი სკანირების ციკლი ---
@@ -126,7 +118,6 @@ def scan_loop():
             if not status["running"]: break
             status["symbols_scanned"] = i + 1
             
-            # უკუთვლის ლოგიკა
             elapsed_time = time.time() - start_time
             if elapsed_time > 1:
                 time_per_symbol = elapsed_time / (i + 1)
@@ -151,44 +142,32 @@ def scan_loop():
                         f"<b>Stop Loss:</b> <code>{result['sl']:.{price_precision}f}</code>\n"
                         f"<b>Take Profit:</b> <code>{result['tp']:.{price_precision}f}</code>"
                     )
-                    found_signals.append(result_text)
+                    found_signals.append({'text': result_text}) # შევცვალეთ, რომ ერგებოდეს ძველ ლოგიკას
 
-            except Exception as e: 
-                # იგნორირებას უკეთებს წყვილს და აგრძელებს, რომ ციკლი არ გაჩერდეს
-                # print(f"Error on {symbol}: {e}")
-                continue
+            except ccxt.BaseError: continue
+            except Exception: continue
             
             time.sleep(CONFIG['api_call_delay'])
 
-        # სკანირების შედეგების განახლება
         scan_end_time = time.time()
         status["scan_duration"] = f"{int(scan_end_time - start_time)} წმ"
-        status["last_scan_time"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-        status["last_scan_results"] = found_signals
-        status["estimated_remaining_sec"] = 0
+        status["last_scan_time"] = time.strftime("%Y-%m-%d %H:%M:%S")
         
         if found_signals:
-            header = f"🎯 <b>სავაჭრო სიგნალები ({status['last_scan_time']})</b>\n"
-            message = header + "\n" + "\n---\n".join(found_signals)
+            final_messages = [sig['text'] for sig in found_signals]
+            status["last_scan_results"] = final_messages
+            header = f"🎯 <b>სავაჭრო სიგნალები ({time.strftime('%H:%M:%S')})</b>\n"
+            message = header + "\n" + "\n---\n".join(final_messages)
             send_telegram(message)
         else:
+            status["last_scan_results"] = []
             print(f"{status['last_scan_time']} - შესაბამისი სიგნალები ვერ მოიძებნა.")
         
-        # ველოდებით შემდეგ სანთელს
-        if status["running"]:
-            wait_seconds = get_seconds_until_next_candle()
-            print(f"სკანირება დასრულდა. ველოდები {int(wait_seconds/60)} წუთს შემდეგ სანთლამდე.")
-            
-            # ველოდებით 10-წამიანი ინტერვალებით, რომ Stop ღილაკმა სწრაფად იმუშაოს
-            for _ in range(int(wait_seconds // 10)):
-                if not status["running"]: break
-                time.sleep(10)
-            if status["running"]:
-                time.sleep(wait_seconds % 10)
+        status["estimated_remaining_sec"] = 0
+        time.sleep(10) # მცირე პაუზა ციკლებს შორის
 
-    # ციკლიდან გამოსვლისას სტატუსის გასუფთავება
     status["running"] = False
-    print("სკანირების პროცესი შეჩერებულია მომხმარებლის მიერ.")
+    print("სკანირების პროცესი შეჩერებულია.")
 
 # --- 7. Flask მარშრუტები (შენი მუშა ვერსია) ---
 @app.route("/")
@@ -213,6 +192,5 @@ def get_status():
     return jsonify(status)
 
 if __name__ == "__main__":
-    # ვიყენებთ PORT ცვლადს Railway-სთვის
     port = int(os.environ.get("PORT", 3000))
     app.run(host="0.0.0.0", port=port)
