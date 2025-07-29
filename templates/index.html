@@ -1,117 +1,119 @@
 <!DOCTYPE html>
-<html lang="ka">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Elite MTA სკანერი</title>
+    <title>Trading Bot Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        body { font-family: 'Inter', "BPG Nino Mtavruli", sans-serif; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
-        .btn { @apply px-8 py-4 rounded-lg font-semibold text-white shadow-lg transition-transform transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-offset-2; }
-        .btn-start { @apply bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 focus:ring-blue-500; }
-        .btn-stop { @apply bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-700 hover:to-pink-700 focus:ring-red-500; }
-        .card { @apply bg-white dark:bg-gray-800 shadow-2xl rounded-2xl p-6 md:p-8; }
+        body { font-family: 'Inter', sans-serif; }
+        .status-badge {
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .status-running { background-color: #10B981; color: white; }
+        .status-stopped { background-color: #EF4444; color: white; }
     </style>
 </head>
-<body class="bg-gray-100 dark:bg-gray-900 text-gray-800 dark:text-gray-200 min-h-screen flex items-center justify-center p-4">
+<body class="bg-gray-900 text-gray-200 flex items-center justify-center min-h-screen">
 
-    <div class="w-full max-w-3xl mx-auto">
-        <div class="card">
-            <header class="text-center mb-8">
-                <h1 class="text-3xl md:text-4xl font-bold text-gray-900 dark:text-white">ელიტური სავაჭრო სკანერი</h1>
-                <p id="strategy-display" class="text-indigo-500 dark:text-indigo-400 mt-2 font-semibold text-lg"></p>
-            </header>
-
-            <div id="controls" class="text-center">
-                <form id="start-form" onsubmit="startScan(event)"><button type="submit" class="btn btn-start text-xl">🚀 სკანირების დაწყება</button></form>
-                <form id="stop-form" onsubmit="stopScan(event)" class="hidden"><button type="submit" class="btn btn-stop text-xl">⛔ სკანირების გაჩერება</button></form>
-            </div>
-
-            <div id="status-container" class="mt-8 text-center space-y-4 hidden">
-                <div id="status-text" class="text-lg font-medium text-blue-600 dark:text-blue-400"></div>
-                <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-4">
-                    <div id="progress-bar" class="bg-gradient-to-r from-blue-500 to-indigo-500 h-4 rounded-full transition-all duration-500" style="width: 0%"></div>
-                </div>
-                <div class="flex justify-between items-center text-sm text-gray-500 dark:text-gray-400">
-                    <div id="progress-label"></div>
-                    <div id="whitelist-label"></div>
-                </div>
-            </div>
-
+    <div class="w-full max-w-2xl mx-auto bg-gray-800 shadow-2xl rounded-2xl p-8 space-y-6">
+        <div class="text-center">
+            <h1 class="text-3xl font-bold text-white">TradeChartist BB Bot</h1>
+            <p class="text-gray-400 mt-2">სტატუსის პანელი</p>
         </div>
-        <footer class="text-center mt-6 text-sm text-gray-500 dark:text-gray-400">პროფესიონალური სტრატეგია v4</footer>
+
+        <!-- Status Display -->
+        <div class="bg-gray-700/50 p-6 rounded-xl grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div class="flex items-center space-x-4">
+                <span class="text-gray-400">სტატუსი:</span>
+                <span id="status-badge" class="status-badge status-stopped">Stopped</span>
+            </div>
+            <div class="flex items-center space-x-4">
+                 <span class="text-gray-400">ფაზა:</span>
+                <b id="current-phase" class="text-white">Idle</b>
+            </div>
+            <div class="col-span-1 md:col-span-2">
+                <div class="w-full bg-gray-600 rounded-full h-2.5">
+                    <div id="progress-bar" class="bg-indigo-500 h-2.5 rounded-full" style="width: 0%"></div>
+                </div>
+                <p class="text-center text-sm mt-2 text-gray-400">
+                    <span id="symbols-scanned">0</span> / <span id="symbols-total">0</span> სიმბოლო
+                </p>
+            </div>
+             <div class="border-t border-gray-600 pt-4 col-span-1 md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <p class="text-sm text-gray-400">ბოლო სკანირება:</p>
+                    <p id="last-scan-time" class="font-mono text-white">N/A</p>
+                </div>
+                <div>
+                    <p class="text-sm text-gray-400">შემდეგი სკანირება:</p>
+                    <p id="next-scan-time" class="font-mono text-white">N/A</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Controls -->
+        <div class="flex items-center justify-center space-x-4 pt-4">
+            <button onclick="startBot()" class="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-8 rounded-lg transition-transform transform hover:scale-105 shadow-lg">
+                Start
+            </button>
+            <button onclick="stopBot()" class="bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-8 rounded-lg transition-transform transform hover:scale-105 shadow-lg">
+                Stop
+            </button>
+        </div>
+        
     </div>
 
     <script>
-        const startForm = document.getElementById('start-form'), stopForm = document.getElementById('stop-form');
-        const statusContainer = document.getElementById('status-container'), statusText = document.getElementById('status-text');
-        const progressBar = document.getElementById('progress-bar'), progressLabel = document.getElementById('progress-label');
-        const strategyDisplay = document.getElementById('strategy-display');
-        const whitelistLabel = document.getElementById('whitelist-label');
-
-        let statusInterval;
-        let initialStatus = {{ status | tojson }};
-        let appConfig = {{ config | tojson }};
-
-        function updateUI(data) {
-            // --- *** გასწორებული ლოგიკა *** ---
-            strategyDisplay.innerText = `სტრატეგია: ${appConfig.structure_tf} სტრუქტურა / ${appConfig.zone_tf} ზონა / ${appConfig.entry_tf} შესვლა`;
-
-            if (data.running) {
-                startForm.classList.add('hidden');
-                stopForm.classList.remove('hidden');
-                statusContainer.classList.remove('hidden');
-                statusText.innerText = `⏳ ${data.current_phase || 'Initializing...'}`;
-                
-                const progress = data.symbols_total > 0 ? (data.symbols_scanned / data.symbols_total) * 100 : 0;
-                progressBar.style.width = `${progress}%`;
-                progressLabel.innerText = `შემოწმდა: ${data.symbols_scanned} / ${data.symbols_total}`;
-                whitelistLabel.innerText = `თეთრი სია: ${data.whitelist_count} სიმბოლო`;
-
-            } else {
-                clearInterval(statusInterval);
-                statusInterval = null;
-                startForm.classList.remove('hidden');
-                stopForm.classList.add('hidden');
-                statusContainer.classList.add('hidden');
-            }
-        }
-
-        async function fetchStatus() {
-            try {
-                const response = await fetch('/status');
-                if (!response.ok) throw new Error('Network response was not ok');
-                const data = await response.json();
-                updateUI(data);
-            } catch (error) {
-                console.error("Failed to fetch status:", error);
-                statusText.innerText = "სერვერთან კავშირი დაიკარგა.";
-                clearInterval(statusInterval);
-            }
-        }
-
-        function startScan(e) {
-            e.preventDefault();
+        function startBot() {
             fetch('/start', { method: 'POST' });
-            setTimeout(() => {
-                if (!statusInterval) statusInterval = setInterval(fetchStatus, 2000);
-            }, 100);
         }
 
-        function stopScan(e) {
-            e.preventDefault();
+        function stopBot() {
             fetch('/stop', { method: 'POST' });
         }
-        
-        document.addEventListener('DOMContentLoaded', () => {
-            if (initialStatus.running) {
-                 statusInterval = setInterval(fetchStatus, 2000);
+
+        async function getStatus() {
+            try {
+                const response = await fetch('/status');
+                const data = await response.json();
+
+                const badge = document.getElementById('status-badge');
+                if (data.running) {
+                    badge.textContent = 'Running';
+                    badge.className = 'status-badge status-running';
+                } else {
+                    badge.textContent = 'Stopped';
+                    badge.className = 'status-badge status-stopped';
+                }
+                
+                document.getElementById('current-phase').textContent = data.current_phase || 'Idle';
+                document.getElementById('symbols-scanned').textContent = data.symbols_scanned || 0;
+                document.getElementById('symbols-total').textContent = data.symbols_total || 0;
+                document.getElementById('last-scan-time').textContent = data.last_scan_time || 'N/A';
+                document.getElementById('next-scan-time').textContent = data.next_scan_time || 'N/A';
+                
+                const progress = data.symbols_total > 0 ? (data.symbols_scanned / data.symbols_total) * 100 : 0;
+                document.getElementById('progress-bar').style.width = `${progress}%`;
+
+            } catch (error) {
+                console.error("Error fetching status:", error);
+                const badge = document.getElementById('status-badge');
+                badge.textContent = 'Error';
+                badge.className = 'status-badge status-stopped';
             }
-            updateUI(initialStatus);
-        });
+        }
+
+        // Fetch status every 3 seconds
+        setInterval(getStatus, 3000);
+        
+        // Initial fetch on page load
+        document.addEventListener('DOMContentLoaded', getStatus);
     </script>
 </body>
 </html>
