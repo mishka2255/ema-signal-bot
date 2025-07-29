@@ -4,20 +4,24 @@ import threading
 import requests
 import ccxt
 import pandas as pd
-import numpy as np
 import ta
 from flask import Flask, render_template, request, jsonify
-from datetime import datetime, timedelta
 
-# --- 1. კონფიგურაცია: TradeChartist BB სტრატეგია ---
+# --- 1. კონფიგურაცია: BB Breakout სტრატეგია ---
 CONFIG = {
-    "strategy_name": "TradeChartist Bollinger Bands Filter",
+    # სტრატეგიის პარამეტრები
     "scan_timeframe": "1h",
     "bb_length": 55,
     "bb_std_dev": 1.0,
+    "signal_freshness_candles": 2, # მაქსიმუმ რამდენი სანთლის წინანდელი სიგნალი მივიღოთ
+
+    # რისკ-მენეჯმენტი
     "risk_reward_ratio": 2.0,
-    "ohlcv_limit": 150, # საჭიროა ახალი ლოგიკისთვის
-    "api_call_delay": 0.2
+
+    # ტექნიკური პარამეტრები
+    "ohlcv_limit": 60,
+    "api_call_delay": 0.25,
+    "scan_interval_minutes": 5 # --- *** ახალი პარამეტრი: სკანირების ინტერვალი წუთებში *** ---
 }
 
 # --- 2. Telegram-ის მონაცემები ---
@@ -25,23 +29,18 @@ BOT_TOKEN = "8158204187:AAFPEApXyE_ot0pz3J23b1h5ubJ82El5gLc"
 CHAT_ID = "7465722084"
 
 app = Flask(__name__)
+exchange = ccxt.binanceusdm({'options': {'defaultType': 'future'}})
 
-# --- 3. გლობალური სტატუსი (შენს სტრუქტურაზე მორგებული) ---
+# --- 3. გლობალური სტატუსი ---
 status = {
     "running": False,
-    "current_strategy": CONFIG["strategy_name"],
+    "current_phase": "Idle",
     "symbols_total": 0,
     "symbols_scanned": 0,
-    "scan_duration": "N/A",
-    "last_scan_time": "N/A",
-    "last_scan_results": [],
-    "estimated_remaining_sec": 0
+    "last_scan_time": "N/A"
 }
 
 # --- 4. სერვისები ---
-# ვიყენებთ შენს მუშა exchange ინსტანციას და გაშვების მეთოდს
-exchange = ccxt.binance({'options': {'defaultType': 'future'}})
-
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     data = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML", "disable_web_page_preview": True}
@@ -50,147 +49,142 @@ def send_telegram(message):
     except requests.exceptions.RequestException as e:
         print(f"Telegram შეცდომა: {e}")
 
-def get_all_symbols():
+def get_all_future_symbols():
+    status["current_phase"] = "Fetching all symbols..."
     try:
-        # ვიყენებთ შენს მუშა მეთოდს
         markets = exchange.load_markets()
         return [s for s in markets if markets[s].get('contract') and markets[s]['quote'] == 'USDT' and markets[s]['settle'] == 'USDT']
-    except ccxt.BaseError as e:
-        print(f"❌ სიმბოლოების ჩატვირთვის შეცდომა: {e}")
+    except Exception as e:
+        print(f"სიმბოლოების ჩატვირთვის შეცდომა: {e}")
         return []
 
-# --- 5. ახალი სტრეგიის ფუნქცია (TradeChartist ლოგიკა) ---
-def check_tradechartist_bb_signal(df):
-    if len(df) < CONFIG["bb_length"]: return None
+# --- 5. სტრატეგიის მთავარი ფუნქცია ---
+def check_bb_breakout_signal(df):
     try:
-        bb = ta.volatility.BollingerBands(close=df['close'], window=CONFIG["bb_length"], window_dev=CONFIG["bb_std_dev"])
-        df['bb_upper'], df['bb_lower'], df['bb_middle'] = bb.bollinger_hband(), bb.bollinger_lband(), bb.bollinger_mavg()
-        df = df.dropna()
-        if df.empty: return None
+        bb_indicator = ta.volatility.BollingerBands(
+            close=df['close'],
+            window=CONFIG["bb_length"],
+            window_dev=CONFIG["bb_std_dev"]
+        )
+        df['bb_upper'] = bb_indicator.bollinger_hband()
+        df['bb_lower'] = bb_indicator.bollinger_lband()
+        df['bb_middle'] = bb_indicator.bollinger_mavg()
 
-        df['long_condition'] = df['close'] > df['bb_upper']
-        df['short_condition'] = df['close'] < df['bb_lower']
-        long_indices, short_indices = df.index[df['long_condition']].to_numpy(), df.index[df['short_condition']].to_numpy()
+        for i in range(1, CONFIG["signal_freshness_candles"] + 1):
+            if len(df) <= i: continue
 
-        if len(long_indices) == 0 and len(short_indices) == 0: return None
+            current = df.iloc[-i]
+            previous = df.iloc[-(i+1)]
+
+            signal_type = None
+            if previous['close'] <= previous['bb_upper'] and current['close'] > current['bb_upper']:
+                signal_type = "BUY"
+            elif previous['close'] >= previous['bb_lower'] and current['close'] < current['bb_lower']:
+                signal_type = "SELL"
             
-        def find_last_event(current_index, events):
-            pos = np.searchsorted(events, current_index)
-            return events[pos-1] if pos > 0 else -1
-
-        df['last_long_event'] = [find_last_event(i, long_indices) for i in df.index]
-        df['last_short_event'] = [find_last_event(i, short_indices) for i in df.index]
-        df['long_is_latest'] = df['last_long_event'] > df['last_short_event']
-        df['state_changed'] = df['long_is_latest'].diff()
-        
-        last_row = df.iloc[-1]
-        signal_type = "BUY" if last_row['state_changed'] == True else "SELL" if last_row['state_changed'] == False else None
-        
-        if signal_type:
-            entry_price, stop_loss = last_row['close'], last_row['bb_middle']
-            risk = abs(entry_price - stop_loss)
-            if risk == 0: return None
-            take_profit = entry_price + risk * CONFIG["risk_reward_ratio"] if signal_type == "BUY" else entry_price - risk * CONFIG["risk_reward_ratio"]
-            return {"signal": signal_type, "entry": entry_price, "sl": stop_loss, "tp": take_profit}
+            if signal_type:
+                entry_price = current['close']
+                stop_loss = current['bb_middle']
+                
+                if signal_type == "BUY":
+                    risk = entry_price - stop_loss
+                    if risk <= 0: continue
+                    take_profit = entry_price + risk * CONFIG["risk_reward_ratio"]
+                else: # SELL
+                    risk = stop_loss - entry_price
+                    if risk <= 0: continue
+                    take_profit = entry_price - risk * CONFIG["risk_reward_ratio"]
+                
+                return {
+                    "signal": signal_type,
+                    "entry": entry_price,
+                    "sl": stop_loss,
+                    "tp": take_profit
+                }
         return None
     except Exception:
         return None
 
-# --- 6. ახალი მთავარი სკანირების ციკლი ---
+# --- 6. მთავარი სკანირების ციკლი ---
 def scan_loop():
     status["running"] = True
-    print("სკანირების ციკლი იწყება... ვტვირთავ სიმბოლოებს.")
-    symbols = get_all_symbols()
-    
-    if not symbols:
-        status["running"] = False
-        print("სიმბოლოების ჩატვირთვა ვერ მოხერხდა. ციკლი ჩერდება.")
-        return
-
-    status["symbols_total"] = len(symbols)
-    print(f"ჩაიტვირთა {len(symbols)} სიმბოლო. ვიწყებ სკანირებას.")
+    all_symbols = get_all_future_symbols()
+    status["symbols_total"] = len(all_symbols)
 
     while status["running"]:
-        start_time = time.time()
+        status["current_phase"] = f"Scanning {CONFIG['scan_timeframe']} BB Breakouts..."
         found_signals = []
-        
-        for i, symbol in enumerate(symbols):
+
+        for i, symbol in enumerate(all_symbols):
             if not status["running"]: break
             status["symbols_scanned"] = i + 1
-            
-            elapsed_time = time.time() - start_time
-            if elapsed_time > 1:
-                time_per_symbol = elapsed_time / (i + 1)
-                remaining_symbols = status["symbols_total"] - (i + 1)
-                status["estimated_remaining_sec"] = int(time_per_symbol * remaining_symbols)
-
             try:
-                ohlcv = exchange.fetch_ohlcv(symbol, timeframe=CONFIG['scan_timeframe'], limit=CONFIG['ohlcv_limit'])
-                if len(ohlcv) < CONFIG['ohlcv_limit']: continue
-                df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
-                result = check_tradechartist_bb_signal(df)
-
+                ohlcv = exchange.fetch_ohlcv(symbol, CONFIG["scan_timeframe"], limit=CONFIG["ohlcv_limit"])
+                df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                
+                result = check_bb_breakout_signal(df)
+                
                 if result:
                     link = f"https://www.tradingview.com/chart/?symbol=BINANCE:{symbol.replace('/', '').replace(':USDT', '')}.P"
-                    prec = df['close'].iloc[-1]
+                    prec = result['entry']
                     price_precision = max(2, str(prec)[::-1].find('.')) if '.' in str(prec) else 2
                     
-                    signal_emoji = '📈' if result['signal'] == 'BUY' else '📉'
-                    result_text = (
-                        f"{signal_emoji} <b>{result['signal']}: <a href='{link}'>{symbol}</a></b> ({CONFIG['scan_timeframe']})\n\n"
+                    signal_text = (
+                        f"🔥 <b>BB Breakout: <a href='{link}'>{symbol}</a> | {result['signal']}</b>\n\n"
                         f"<b>Entry:</b> <code>{result['entry']:.{price_precision}f}</code>\n"
                         f"<b>Stop Loss:</b> <code>{result['sl']:.{price_precision}f}</code>\n"
                         f"<b>Take Profit:</b> <code>{result['tp']:.{price_precision}f}</code>"
                     )
-                    found_signals.append({'text': result_text}) # შევცვალეთ, რომ ერგებოდეს ძველ ლოგიკას
+                    found_signals.append(signal_text)
+                    print(f"🔥 სიგნალი: {symbol} ({result['signal']})")
+                    
+            except Exception:
+                continue
+            time.sleep(CONFIG["api_call_delay"])
 
-            except ccxt.BaseError: continue
-            except Exception: continue
-            
-            time.sleep(CONFIG['api_call_delay'])
-
-        scan_end_time = time.time()
-        status["scan_duration"] = f"{int(scan_end_time - start_time)} წმ"
         status["last_scan_time"] = time.strftime("%Y-%m-%d %H:%M:%S")
         
         if found_signals:
-            final_messages = [sig['text'] for sig in found_signals]
-            status["last_scan_results"] = final_messages
-            header = f"🎯 <b>სავაჭრო სიგნალები ({time.strftime('%H:%M:%S')})</b>\n"
-            message = header + "\n" + "\n---\n".join(final_messages)
+            header = f"📢 <b>სავაჭრო სიგნალები ({status['last_scan_time']})</b>\n"
+            message = header + "\n---\n".join(found_signals)
             send_telegram(message)
         else:
-            status["last_scan_results"] = []
-            print(f"{status['last_scan_time']} - შესაბამისი სიგნალები ვერ მოიძებნა.")
+            status_message = (
+                f"✅ <b>სტატუს-რეპორტი ({status['last_scan_time']})</b>\n\n"
+                f"BB Breakout სიგნალები ვერ მოიძებნა. ვაგრძელებ დაკვირვებას..."
+            )
+            send_telegram(status_message)
         
-        status["estimated_remaining_sec"] = 0
-        time.sleep(10) # მცირე პაუზა ციკლებს შორის
+        # --- *** გასწორებული ლოგიკა: ველოდებით განსაზღვრულ დროს შემდეგ ციკლამდე *** ---
+        if status["running"]:
+            sleep_duration = CONFIG["scan_interval_minutes"] * 60
+            print(f"ციკლი დასრულდა. შემდეგი სკანირება {CONFIG['scan_interval_minutes']} წუთში...")
+            time.sleep(sleep_duration)
 
     status["running"] = False
     print("სკანირების პროცესი შეჩერებულია.")
 
-# --- 7. Flask მარშრუტები (შენი მუშა ვერსია) ---
+
+# --- 7. Flask მარშრუტები (უცვლელია) ---
 @app.route("/")
-def index(): 
+def index():
     return render_template("index.html", status=status, config=CONFIG)
 
 @app.route("/start", methods=["POST"])
 def start():
     if not status["running"]:
-        thread = threading.Thread(target=scan_loop)
-        thread.daemon = True
+        thread = threading.Thread(target=scan_loop, daemon=True)
         thread.start()
-    return render_template("index.html", status=status, config=CONFIG)
+    return "OK"
 
 @app.route("/stop", methods=["POST"])
 def stop():
     status["running"] = False
-    return render_template("index.html", status=status, config=CONFIG)
+    return "OK"
 
 @app.route("/status")
-def get_status(): 
+def get_status():
     return jsonify(status)
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 3000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=3000)
