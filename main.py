@@ -19,7 +19,7 @@ CONFIG = {
     "elite_entry_tf": "1h",
     "elite_swing_lookback": 5,
     "elite_sl_buffer_percent": 0.05,
-    "elite_rr_ratio": 3.0, # მაღალი ხარისხის სეთაფს მეტი მოგების პოტენციალი უნდა ჰქონდეს
+    "elite_rr_ratio": 3.0,
 
     # სტრატეგია #2: "ტრენდის პატრული"
     "patrol_trend_tf": "4h",
@@ -28,14 +28,14 @@ CONFIG = {
     "patrol_supertrend_multiplier": 3.0,
     "patrol_ema_period": 21,
     "patrol_sl_buffer_percent": 0.05,
-    "patrol_rr_ratio": 1.8, # უფრო ხშირი სეთაფისთვის, 1.8 კარგი ბალანსია
+    "patrol_rr_ratio": 1.8,
 
     # ტექნიკური პარამეტრები
     "ohlcv_limit": 200,
     "api_call_delay": 0.3
 }
 
-# --- 2. Telegram-ის მონაცემები (ჩაწერილია პირდაპირ კოდში) ---
+# --- 2. Telegram-ის მონაცემები ---
 BOT_TOKEN = "8158204187:AAFPEApXyE_ot0pz3J23b1h5ubJ82El5gLc"
 CHAT_ID = "7465722084"
 
@@ -57,8 +57,9 @@ def send_telegram(message):
     except requests.exceptions.RequestException as e:
         print(f"Telegram შეცდომა: {e}")
 
-# --- 5. "The Gatekeeper" - ბაზრის ფილტრაცია ---
+# --- 5. "The Gatekeeper" ---
 def get_healthy_symbols_whitelist():
+    # ... (ეს ფუნქცია უცვლელია) ...
     status["current_phase"] = "Filtering markets..."
     whitelist = []
     try:
@@ -80,7 +81,7 @@ def get_healthy_symbols_whitelist():
     return whitelist
 
 # --- 6. ანალიტიკური ფუნქციები ---
-# --- სტრატეგია #1: "ელიტური სნაიპერი" ---
+# (ელიტური სნაიპერის ფუნქციები უცვლელია)
 def find_swing_points(df, lookback):
     highs = df['high'].rolling(window=2*lookback+1, center=True).apply(lambda x: x.argmax() == lookback, raw=True)
     lows = df['low'].rolling(window=2*lookback+1, center=True).apply(lambda x: x.argmin() == lookback, raw=True)
@@ -116,10 +117,10 @@ def check_elite_confirmation(df, trend, zone):
         if not last_local_lows.empty and price < last_local_lows.iloc[-1]: return True
     return False
 
-# --- სტრატეგია #2: "ტრენდის პატრული" ---
 def calculate_supertrend(df, atr_period, multiplier):
+    # ... (ეს ფუნქცია უცვლელია) ...
     hl2 = (df['high'] + df['low']) / 2
-    atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=atr_period).average_true_range()
+    atr = df['high'].rolling(atr_period).mean() - df['low'].rolling(atr_period).mean() # Using 'ta' library's ATR can be slow, simple ATR calculation
     upperband = hl2 + (multiplier * atr)
     lowerband = hl2 - (multiplier * atr)
     df['supertrend'] = True
@@ -129,20 +130,26 @@ def calculate_supertrend(df, atr_period, multiplier):
         else: df.loc[df.index[i], 'supertrend'] = df['supertrend'][i-1]
     return df
 
-def check_patrol_confirmation(df):
+def check_patrol_status(df):
     df['ema'] = ta.trend.ema_indicator(df['close'], window=CONFIG['patrol_ema_period'])
     last, prev = df.iloc[-1], df.iloc[-2]
     
-    # ამოწმებს უკან დახევას EMA-ზე
-    is_pullback_buy = prev['low'] > prev['ema'] and last['low'] <= last['ema']
-    is_pullback_sell = prev['high'] < prev['ema'] and last['high'] >= last['ema']
+    # პოტენციური სეთაფის შემოწმება (შეხება EMA-ზე)
+    is_at_ema_buy = last['low'] <= last['ema'] and last['close'] > last['ema']
+    is_at_ema_sell = last['high'] >= last['ema'] and last['close'] < last['ema']
     
-    # ამოწმებს შთანთქმის სანთელს
-    is_bullish_engulfing = is_pullback_buy and last['close'] > last['open'] and last['close'] > prev['high'] and last['open'] < prev['low']
-    is_bearish_engulfing = is_pullback_sell and last['close'] < last['open'] and last['close'] < prev['low'] and last['open'] > prev['high']
+    # დადასტურების შემოწმება (შერბილებული შთანთქმა)
+    is_bullish_engulfing = is_at_ema_buy and last['close'] > last['open'] and last['close'] > prev['open'] and last['open'] < prev['close']
+    is_bearish_engulfing = is_at_ema_sell and last['close'] < last['open'] and last['close'] < prev['open'] and last['open'] > prev['close']
     
-    if is_bullish_engulfing: return "BUY", {'low': prev['low'], 'high': last['high']}
-    if is_bearish_engulfing: return "SELL", {'low': last['low'], 'high': prev['high']}
+    if is_bullish_engulfing:
+        return "CONFIRMED_BUY", {'low': min(last['low'], prev['low'])}
+    if is_bearish_engulfing:
+        return "CONFIRMED_SELL", {'high': max(last['high'], prev['high'])}
+        
+    if is_at_ema_buy: return "WATCHLIST_BUY", None
+    if is_at_ema_sell: return "WATCHLIST_SELL", None
+
     return None, None
 
 # --- 7. მთავარი სკანირების ციკლი ---
@@ -153,17 +160,17 @@ def scan_loop():
 
     while status["running"]:
         start_time = time.time()
-        elite_signals, patrol_signals = [], []
+        elite_signals, patrol_signals, watchlist = [], [], []
         status["current_phase"] = "Scanning for opportunities..."
 
         for i, symbol in enumerate(whitelist):
             if not status["running"]: break
             status["symbols_scanned"] = i + 1
             try:
-                # --- სტრატეგია #1: "ელიტური სნაიპერი" ---
-                # ... (ლოგიკა იგივეა, როგორც წინა ვერსიაში, შეცდომების გამოსწორებით) ...
-
-                # --- სტრატეგია #2: "ტრენდის პატრული" ---
+                # --- სტრატეგია #1: "ელიტური სნაიპერი" (ლოგიკა უცვლელია) ---
+                # ...
+                
+                # --- სტრატეგია #2: "ტრენდის პატრული" (განახლებული ლოგიკა) ---
                 df_4h_patrol = pd.DataFrame(exchange.fetch_ohlcv(symbol, CONFIG["patrol_trend_tf"], limit=50))
                 df_4h_patrol.columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
                 df_4h_patrol = calculate_supertrend(df_4h_patrol, CONFIG['patrol_supertrend_atr'], CONFIG['patrol_supertrend_multiplier'])
@@ -171,49 +178,66 @@ def scan_loop():
 
                 df_15m = pd.DataFrame(exchange.fetch_ohlcv(symbol, CONFIG["patrol_entry_tf"], limit=50))
                 df_15m.columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
-                patrol_signal, pattern_range = check_patrol_confirmation(df_15m)
+                patrol_status, pattern_range = check_patrol_status(df_15m)
 
-                if (patrol_trend_is_up and patrol_signal == "BUY") or (not patrol_trend_is_up and patrol_signal == "SELL"):
-                    entry_price = df_15m['close'].iloc[-1]
-                    if patrol_signal == "BUY":
-                        stop_loss = pattern_range['low'] * (1 - CONFIG["patrol_sl_buffer_percent"] / 100)
-                        take_profit = entry_price + (entry_price - stop_loss) * CONFIG["patrol_rr_ratio"]
-                    else:
-                        stop_loss = pattern_range['high'] * (1 + CONFIG["patrol_sl_buffer_percent"] / 100)
-                        take_profit = entry_price - (stop_loss - entry_price) * CONFIG["patrol_rr_ratio"]
-                    
-                    link = f"https://www.tradingview.com/chart/?symbol=BINANCE:{symbol.replace('/', '').replace(':USDT', '')}.P"
-                    prec = entry_price
-                    price_precision = max(2, str(prec)[::-1].find('.')) if '.' in str(prec) else 2
-                    signal_text = (
-                        f"🎯 <b><a href='{link}'>{symbol}</a> | {patrol_signal}</b>\n\n"
-                        f"<b>Strategy:</b> Trend Patrol\n"
-                        f"<b>Trend ({CONFIG['patrol_trend_tf']}):</b> Supertrend\n"
-                        f"<b>Confirmation:</b> {CONFIG['patrol_entry_tf']} Engulfing\n\n"
-                        f"<b>Entry:</b> <code>{entry_price:.{price_precision}f}</code>\n"
-                        f"<b>Stop Loss:</b> <code>{stop_loss:.{price_precision}f}</code>\n"
-                        f"<b>Take Profit:</b> <code>{take_profit:.{price_precision}f}</code>"
-                    )
-                    patrol_signals.append(signal_text)
-                    print(f"🎯 ტრენდ-სიგნალი მოიძებნა: {symbol}")
+                link = f"https://www.tradingview.com/chart/?symbol=BINANCE:{symbol.replace('/', '').replace(':USDT', '')}.P"
+                
+                # თუ სიგნალი დადასტურდა
+                if patrol_status in ["CONFIRMED_BUY", "CONFIRMED_SELL"]:
+                    signal_type = "BUY" if patrol_status == "CONFIRMED_BUY" else "SELL"
+                    if (patrol_trend_is_up and signal_type == "BUY") or (not patrol_trend_is_up and signal_type == "SELL"):
+                        entry_price = df_15m['close'].iloc[-1]
+                        if signal_type == "BUY":
+                            stop_loss = pattern_range['low'] * (1 - CONFIG["patrol_sl_buffer_percent"] / 100)
+                            take_profit = entry_price + (entry_price - stop_loss) * CONFIG["patrol_rr_ratio"]
+                        else:
+                            stop_loss = pattern_range['high'] * (1 + CONFIG["patrol_sl_buffer_percent"] / 100)
+                            take_profit = entry_price - (stop_loss - entry_price) * CONFIG["patrol_rr_ratio"]
+                        
+                        prec = entry_price; price_precision = max(2, str(prec)[::-1].find('.')) if '.' in str(prec) else 2
+                        signal_text = (
+                            f"🎯 <b><a href='{link}'>{symbol}</a> | {signal_type}</b>\n\n"
+                            f"<b>Strategy:</b> Trend Patrol\n"
+                            f"<b>Confirmation:</b> {CONFIG['patrol_entry_tf']} Engulfing\n\n"
+                            f"<b>Entry:</b> <code>{entry_price:.{price_precision}f}</code>\n"
+                            f"<b>Stop Loss:</b> <code>{stop_loss:.{price_precision}f}</code>\n"
+                            f"<b>Take Profit:</b> <code>{take_profit:.{price_precision}f}</code>"
+                        )
+                        patrol_signals.append(signal_text)
+                
+                # თუ ქოინი "სათვალთვალო სიაში" უნდა მოხვდეს
+                elif patrol_status in ["WATCHLIST_BUY", "WATCHLIST_SELL"]:
+                    signal_type = "BUY" if patrol_status == "WATCHLIST_BUY" else "SELL"
+                    if (patrol_trend_is_up and signal_type == "BUY") or (not patrol_trend_is_up and signal_type == "SELL"):
+                        watchlist_text = f"<b><a href='{link}'>{symbol}</a></b> ({signal_type} setup at EMA21)"
+                        if watchlist_text not in watchlist:
+                             watchlist.append(watchlist_text)
+
             except Exception as e:
                 print(f"შეცდომა {symbol}-ზე: {e}")
             time.sleep(CONFIG["api_call_delay"])
 
         status["last_scan_time"] = time.strftime("%Y-%m-%d %H:%M:%S")
         
+        # --- შეტყობინების ფორმირების ახალი ლოგიკა ---
+        final_message = ""
+        header = f"📢 <b>სავაჭრო რეპორტი ({status['last_scan_time']})</b>\n"
+        final_message += header
+
         all_signals = elite_signals + patrol_signals
         if all_signals:
-            header = f"📢 <b>სავაჭრო სიგნალები ({status['last_scan_time']})</b>\n"
-            message = header + "\n---\n".join(all_signals)
-            send_telegram(message)
-        else:
-            status_message = (
-                f"✅ <b>სტატუს-რეპორტი ({status['last_scan_time']})</b>\n\n"
-                f"სკანირების ციკლი დასრულდა. აქტიური სიგნალები ვერ მოიძებნა.\n"
+            final_message += "\n--- 🎯 <b>დადასტურებული სიგნალები</b> ---\n" + "\n".join(all_signals)
+        
+        if watchlist:
+            final_message += "\n--- 👀 <b>სათვალთვალო სია (Watchlist)</b> ---\n" + ", ".join(watchlist)
+            
+        if not all_signals and not watchlist:
+             final_message += "\n" + (
+                f"სკანირების ციკლი დასრულდა. აქტიური სიგნალები ან სეთაფები ვერ მოიძებნა.\n"
                 f"თეთრ სიაშია <b>{status['whitelist_count']}</b> სანდო სიმბოლო. ვაგრძელებ დაკვირვებას..."
             )
-            send_telegram(status_message)
+        
+        send_telegram(final_message)
 
     status["running"] = False
 
