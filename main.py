@@ -107,6 +107,8 @@ def check_bb_breakout_signal(df):
 
 # --- 6. მთავარი სკანირების ციკლი ---
 def scan_loop():
+    # დაველოდოთ რამდენიმე წამი, რომ სერვერი სრულად ჩაიტვირთოს
+    time.sleep(10) 
     status["running"] = True
     all_symbols = get_all_future_symbols()
     status["symbols_total"] = len(all_symbols)
@@ -155,7 +157,6 @@ def scan_loop():
             )
             send_telegram(status_message)
         
-        # --- *** გასწორებული ლოგიკა: ველოდებით განსაზღვრულ დროს შემდეგ ციკლამდე *** ---
         if status["running"]:
             sleep_duration = CONFIG["scan_interval_minutes"] * 60
             print(f"ციკლი დასრულდა. შემდეგი სკანირება {CONFIG['scan_interval_minutes']} წუთში...")
@@ -165,7 +166,7 @@ def scan_loop():
     print("სკანირების პროცესი შეჩერებულია.")
 
 
-# --- 7. Flask მარშრუტები (უცვლელია) ---
+# --- 7. Flask მარშრუტები ---
 @app.route("/")
 def index():
     return render_template("index.html", status=status, config=CONFIG)
@@ -173,18 +174,31 @@ def index():
 @app.route("/start", methods=["POST"])
 def start():
     if not status["running"]:
+        print("Starting scanner manually...")
         thread = threading.Thread(target=scan_loop, daemon=True)
         thread.start()
     return "OK"
 
 @app.route("/stop", methods=["POST"])
 def stop():
-    status["running"] = False
+    if status["running"]:
+        print("Stopping scanner manually...")
+        status["running"] = False
     return "OK"
 
 @app.route("/status")
 def get_status():
     return jsonify(status)
+
+# --- 8. ავტომატური გაშვება სერვერის ჩართვისას ---
+def auto_start_scanner():
+    """Starts the scanner in a background thread upon application startup."""
+    print("Starting scanner automatically on boot...")
+    thread = threading.Thread(target=scan_loop, daemon=True)
+    thread.start()
+
+# ეს კოდი გაეშვება ერთხელ, როდესაც Gunicorn-ი ჩატვირთავს აპლიკაციას
+auto_start_scanner()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=3000)
